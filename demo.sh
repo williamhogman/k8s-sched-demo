@@ -4,21 +4,7 @@ set -e
 # ================================================================
 # K8s Scheduler Demo
 # 
-# This script demonstrates the K8s scheduler demo system by:
-# 1. Building the project
-# 2. Starting the Scheduler service with mock K8s client
-# 3. Starting the Global Scheduler service
-# 4. Running a client demo that requests a sandbox
-# 
-# Usage:
-#   ./demo.sh [options]
-#
-# Options:
-#   --no-build        Skip the build step
-#   --scheduler-port  Set custom scheduler port (default: 50052)
-#   --global-port     Set custom global scheduler port (default: 50051)
-#   --timeout         Set service health check timeout in seconds (default: 10)
-#   --help            Show this help message
+# This script demonstrates the K8s scheduler demo system
 # ================================================================
 
 # Color codes for better readability
@@ -77,37 +63,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Timestamp function
-timestamp() {
-  date "+%Y-%m-%d %H:%M:%S"
-}
-
 # Log functions
-log_info() {
-  echo -e "${BLUE}[$(timestamp) INFO]${NC} $1"
-}
-
-log_success() {
-  echo -e "${GREEN}[$(timestamp) SUCCESS]${NC} $1"
-}
-
-log_warning() {
-  echo -e "${YELLOW}[$(timestamp) WARNING]${NC} $1"
-}
-
-log_error() {
-  echo -e "${RED}[$(timestamp) ERROR]${NC} $1"
-}
-
-# Check if a port is already in use
-is_port_in_use() {
-  local port=$1
-  if nc -z localhost "$port" >/dev/null 2>&1; then
-    return 0  # Port is in use
-  else
-    return 1  # Port is free
-  fi
-}
+log_info() { echo -e "${BLUE}[$(date "+%Y-%m-%d %H:%M:%S") INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[$(date "+%Y-%m-%d %H:%M:%S") SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[$(date "+%Y-%m-%d %H:%M:%S") WARNING]${NC} $1"; }
+log_error() { echo -e "${RED}[$(date "+%Y-%m-%d %H:%M:%S") ERROR]${NC} $1"; }
 
 # Cleanup function to ensure all processes are terminated
 cleanup() {
@@ -117,20 +77,8 @@ cleanup() {
   for ((i=${#PIDS[@]}-1; i>=0; i--)); do
     pid=${PIDS[$i]}
     if ps -p $pid > /dev/null; then
-      log_info "Stopping process with PID $pid..."
       kill $pid 2>/dev/null || true
-      # Wait for process to terminate gracefully
-      for j in {1..5}; do
-        if ! ps -p $pid > /dev/null; then
-          break
-        fi
-        sleep 1
-      done
-      # Force kill if still running
-      if ps -p $pid > /dev/null; then
-        log_warning "Process $pid did not terminate gracefully, force killing..."
-        kill -9 $pid 2>/dev/null || true
-      fi
+      wait $pid 2>/dev/null || true
     fi
   done
   
@@ -140,7 +88,7 @@ cleanup() {
 # Register the cleanup function for various signals
 trap cleanup EXIT INT TERM
 
-# Function to check if a service is ready by checking a port
+# Function to check if a service is ready
 check_service_port() {
   local port=$1
   local service_name=$2
@@ -151,14 +99,8 @@ check_service_port() {
   log_info "Waiting for $service_name to be ready on port $port..."
   
   while ! nc -z localhost $port >/dev/null 2>&1; do
-    if [ $attempt -ge $max_attempts ]; then
-      log_error "$service_name failed to start after $max_attempts attempts!"
-      return 1
-    fi
-    
-    # Check if process is still running
-    if ! ps -p $last_pid > /dev/null; then
-      log_error "$service_name process died unexpectedly!"
+    if [ $attempt -ge $max_attempts ] || ! ps -p $last_pid > /dev/null; then
+      log_error "$service_name failed to start!"
       return 1
     fi
     
@@ -167,83 +109,59 @@ check_service_port() {
     ((attempt++))
   done
   
-  log_success "$service_name is ready and listening on port $port!"
+  log_success "$service_name is ready on port $port!"
   return 0
 }
 
 # Check if ports are already in use
-if is_port_in_use $SCHEDULER_PORT; then
-  log_error "Port $SCHEDULER_PORT is already in use! Please stop any running scheduler service or use --scheduler-port to specify a different port."
+if nc -z localhost $SCHEDULER_PORT >/dev/null 2>&1; then
+  log_error "Port $SCHEDULER_PORT is already in use!"
   exit 1
 fi
 
-if is_port_in_use $GLOBAL_PORT; then
-  log_error "Port $GLOBAL_PORT is already in use! Please stop any running global scheduler service or use --global-port to specify a different port."
+if nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
+  log_error "Port $GLOBAL_PORT is already in use!"
   exit 1
 fi
 
 # Build the project if not skipped
 if [ "$BUILD" = true ]; then
   log_info "Building the project..."
-  if ! make build; then
-    log_error "Build failed! Check the build logs for details."
-    exit 1
-  fi
+  make build || { log_error "Build failed!"; exit 1; }
   log_success "Build completed successfully!"
 else
   log_info "Skipping build step..."
 fi
 
 # Start the Scheduler service
-log_info "Starting the Scheduler service (with mock K8s client) on port $SCHEDULER_PORT..."
+log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 ./bin/scheduler --mock=false --port=$SCHEDULER_PORT &
-scheduler_pid=$!
-PIDS+=($scheduler_pid)
-
-if ! ps -p $scheduler_pid > /dev/null; then
-  log_error "Scheduler process failed to start!"
-  exit 1
-fi
-log_info "Scheduler service started with PID $scheduler_pid"
+PIDS+=($!)
 
 # Check if the scheduler service is ready
-if ! check_service_port $SCHEDULER_PORT "Scheduler service" $HEALTH_CHECK_TIMEOUT; then
-  log_error "Failed to start Scheduler service. Exiting."
-  exit 1
-fi
+check_service_port $SCHEDULER_PORT "Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 
 # Start the Global Scheduler service
-log_info "Starting the Global Scheduler service with simplified API on port $GLOBAL_PORT..."
+log_info "Starting the Global Scheduler service on port $GLOBAL_PORT..."
 ./bin/global-scheduler --port=$GLOBAL_PORT &
-global_pid=$!
-PIDS+=($global_pid)
-
-if ! ps -p $global_pid > /dev/null; then
-  log_error "Global Scheduler process failed to start!"
-  exit 1
-fi
-log_info "Global Scheduler service started with PID $global_pid"
+PIDS+=($!)
 
 # Check if the global scheduler service is ready
-if ! check_service_port $GLOBAL_PORT "Global Scheduler service" $HEALTH_CHECK_TIMEOUT; then
-  log_error "Failed to start Global Scheduler service. Exiting."
-  exit 1
-fi
+check_service_port $GLOBAL_PORT "Global Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 
-# Run the client
-log_info "Running the client to get a sandbox using the simplified API..."
-log_info "This will use a single HTTP call to the Global Scheduler which handles both cluster selection and sandbox scheduling."
-log_info "Resources are managed internally by the scheduler with default settings."
+# Run the API request using xh instead of client binary
+log_info "Making API request to get a sandbox..."
 
-if ! ./bin/client --selector="http://localhost:$GLOBAL_PORT"; then
-  log_error "Client execution failed!"
-  exit 1
-fi
+SELECTOR_URL="http://localhost:$GLOBAL_PORT/selector.ClusterSelector/GetSandbox"
 
-log_success "Demo completed successfully!"
+# Using xh to make the Connect RPC call
+xh POST $SELECTOR_URL \
+  Content-Type:application/json \
+  --raw '{"sandboxId":"123","configuration":{}}' \
+  --pretty=format || { log_error "API request failed!"; exit 1; }
+
 log_info "Press ENTER to stop the services and exit..."
 read
 
 # cleanup function will be called automatically on exit
-log_info "Stopping services and cleaning up..."
 exit 0 

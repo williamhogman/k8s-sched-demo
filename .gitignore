@@ -60,4 +60,13 @@ kubeconfig
 
 # Build outputs
 build/
-dist/ 
+dist/
+
+# Nix & Direnv
+.direnv/
+.go/
+.bin/
+.cache/
+.config/
+result
+result-* 
