@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package selector;
+option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/global-scheduler/v1;selectorv1";
+
+// ClusterSelector service handles selecting the appropriate cluster for a sandbox
+service ClusterSelector {
+  // GetSandbox is a simplified endpoint that selects a cluster and schedules a sandbox in one call
+  rpc GetSandbox (GetSandboxRequest) returns (GetSandboxResponse) {}
+}
+
+// GetSandboxRequest contains information needed to get a sandbox
+message GetSandboxRequest {
+  // Unique identifier for the sandbox (optional, will be generated if empty)
+  string sandbox_id = 1;
+  // Additional configuration for the sandbox
+  map<string, string> configuration = 2;
+}
+
+// GetSandboxResponse contains information about the created sandbox
+message GetSandboxResponse {
+  // Status of the operation
+  GetSandboxStatus status = 1;
+  // Error message, if any
+  string error_message = 2;
+  // Sandbox ID used
+  string sandbox_id = 3;
+  // Kubernetes resource name created
+  string resource_name = 4;
+  // Cluster ID where the sandbox was scheduled
+  string cluster_id = 5;
+  // Endpoint of the cluster where the sandbox was scheduled
+  string cluster_endpoint = 6;
+}
+
+// GetSandboxStatus represents the status of a get sandbox operation
+enum GetSandboxStatus {
+  GET_SANDBOX_STATUS_UNSPECIFIED = 0;
+  GET_SANDBOX_STATUS_SUCCEEDED = 1;
+  GET_SANDBOX_STATUS_FAILED = 2;
+} 

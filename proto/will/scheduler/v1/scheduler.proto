@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package scheduler;
+option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1;schedulerv1";
+
+// SandboxScheduler service handles scheduling sandboxes on a Kubernetes cluster
+service SandboxScheduler {
+  // ScheduleSandbox schedules a sandbox workload on the cluster
+  rpc ScheduleSandbox (ScheduleRequest) returns (ScheduleResponse) {}
+}
+
+// ScheduleRequest contains information needed to schedule a sandbox
+message ScheduleRequest {
+  // Unique identifier for the sandbox
+  string sandbox_id = 1;
+  // Namespace to create the sandbox in
+  string namespace = 2;
+  // Additional configuration for the sandbox
+  map<string, string> configuration = 4;
+}
+
+// ScheduleResponse contains information about the scheduled sandbox
+message ScheduleResponse {
+  // Status of the scheduling operation
+  ScheduleStatus status = 1;
+  // Error message, if any
+  string error_message = 2;
+  // Kubernetes resource name created
+  string resource_name = 3;
+}
+
+// ScheduleStatus represents the status of a scheduling operation
+enum ScheduleStatus {
+  SCHEDULE_STATUS_UNSPECIFIED = 0;
+  SCHEDULE_STATUS_SCHEDULED = 1;
+  SCHEDULE_STATUS_FAILED = 2;
+} 
