@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -27,6 +28,8 @@ const (
 type K8sClient struct {
 	clientset *kubernetes.Clientset
 	namespace string
+	// Configuration options
+	useGvisor bool // Whether to enforce gVisor runtime
 }
 
 // NewK8sClient creates a new K8s client
@@ -46,6 +49,7 @@ func NewK8sClient(cfg *config.Config) (*K8sClient, error) {
 	return &K8sClient{
 		clientset: clientset,
 		namespace: cfg.Kubernetes.Namespace,
+		useGvisor: cfg.Kubernetes.UseGvisor,
 	}, nil
 }
 
@@ -59,6 +63,7 @@ func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
 	return &K8sClient{
 		clientset: clientset,
 		namespace: "sandbox",
+		useGvisor: false, // Default to false for testing
 	}, nil
 }
 
@@ -67,25 +72,28 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	// Use the client's namespace
 	namespace := k.namespace
 
-	// Ensure the namespace exists
-	err := k.ensureNamespaceExists(ctx, namespace)
-	if err != nil {
-		return "", fmt.Errorf("failed to ensure namespace exists: %v", err)
-	}
-
-	// Create pod labels
+	// Create standard labels
 	labels := map[string]string{
-		"app": "sandbox",
+		"app":        "sandbox",
+		"managed-by": "scheduler",
+		"sandbox-id": podName,
 	}
 
-	// Add metadata as labels
+	// Add all metadata as labels with a prefix to avoid conflicts
 	for key, value := range metadata {
 		if key != "" && value != "" {
 			labels[fmt.Sprintf("sandbox-metadata-%s", key)] = value
 		}
 	}
 
-	// Create resource requirements with default values
+	// Create standard annotations
+	annotations := map[string]string{
+		"sandbox.scheduler/scheduled":          "true",
+		"sandbox.scheduler/creation-timestamp": time.Now().Format(time.RFC3339),
+		"sandbox.scheduler/pod-name":           podName,
+	}
+
+	// Define resource requirements (customizable in the future)
 	resourceRequirements := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse(DefaultCPU),
@@ -97,31 +105,136 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 		},
 	}
 
-	// Create the pod object
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: namespace,
-			Labels:    labels,
+	// Define environment variables with some useful defaults
+	envVars := []corev1.EnvVar{
+		{
+			Name:  "SANDBOX_ID",
+			Value: podName,
 		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:      "sandbox-container",
-					Image:     getImageFromMetadata(metadata),
-					Resources: resourceRequirements,
+		{
+			Name:  "SANDBOX_NAMESPACE",
+			Value: namespace,
+		},
+		{
+			Name: "POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.name",
+				},
+			},
+		},
+		{
+			Name: "POD_IP",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "status.podIP",
 				},
 			},
 		},
 	}
 
-	// Create the pod
+	// Create the container specification
+	container := corev1.Container{
+		Name:            "sandbox-container",
+		Image:           "kennethreitz/httpbin",
+		Args:            []string{"gunicorn", "-b", "0.0.0.0:8000", "httpbin:app", "-k", "gevent"},
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Resources:       resourceRequirements,
+		Env:             envVars,
+	}
+
+	// Configure liveness probe for health checking
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/health",
+				Port: intstr.FromInt(80),
+			},
+		},
+		InitialDelaySeconds: 1,
+		PeriodSeconds:       60,
+		TimeoutSeconds:      5,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+	container.StartupProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/health",
+				Port: intstr.FromInt(8000),
+			},
+		},
+		InitialDelaySeconds: 0,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      5,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+
+	// Optional volume mounts could be added here
+	// container.VolumeMounts = []corev1.VolumeMount{...}
+
+	// Create pod specification
+	podSpec := corev1.PodSpec{
+		Containers:    []corev1.Container{container},
+		RestartPolicy: corev1.RestartPolicyNever, // Sandboxes shouldn't restart automatically
+
+		// Security context for the pod
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot: &[]bool{true}[0],
+			RunAsUser:    &[]int64{1000}[0], // Run as non-root user
+			FSGroup:      &[]int64{1000}[0],
+		},
+
+		// Termination Grace Period (30 seconds is the default)
+		TerminationGracePeriodSeconds: &[]int64{30}[0],
+
+		// DNS policy (ClusterFirst is the default)
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"8.8.8.8", "1.1.1.1"},
+		},
+	}
+
+	// Add gVisor configuration if enabled
+	if k.useGvisor {
+		// Add node selector for gVisor
+		if podSpec.NodeSelector == nil {
+			podSpec.NodeSelector = make(map[string]string)
+		}
+		podSpec.NodeSelector["sandbox.gke.io/runtime"] = "gvisor"
+
+		// Add toleration for gVisor
+		gvisorToleration := corev1.Toleration{
+			Key:      "sandbox.gke.io/runtime",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "gvisor",
+			Effect:   corev1.TaintEffectNoSchedule,
+		}
+		podSpec.Tolerations = append(podSpec.Tolerations, gvisorToleration)
+
+		// Add annotation indicating gVisor is being used
+		annotations["sandbox.scheduler/isolation"] = "gvisor"
+	}
+
+	// Create full pod specification
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        podName,
+			Namespace:   namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: podSpec,
+	}
+
+	// Create the pod in Kubernetes
 	createdPod, err := k.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to create pod: %v", err)
 	}
 
-	// Watch pod until it's scheduled
+	// Watch pod until it's scheduled (in background)
 	go k.watchPodStatus(namespace, createdPod.Name)
 
 	return createdPod.Name, nil
@@ -170,36 +283,4 @@ func (k *K8sClient) watchPodStatus(namespace, podName string) {
 
 		time.Sleep(5 * time.Second)
 	}
-}
-
-// ensureNamespaceExists checks if the namespace exists and creates it if it doesn't
-func (k *K8sClient) ensureNamespaceExists(ctx context.Context, namespace string) error {
-	_, err := k.clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err == nil {
-		// Namespace exists
-		return nil
-	}
-
-	// Create the namespace
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
-		},
-	}
-
-	_, err = k.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create namespace %s: %v", namespace, err)
-	}
-
-	log.Printf("Created namespace %s", namespace)
-	return nil
-}
-
-// Helper function to get image from metadata
-func getImageFromMetadata(metadata map[string]string) string {
-	if image, ok := metadata["image"]; ok && image != "" {
-		return image
-	}
-	return "busybox:latest" // Default image
 }

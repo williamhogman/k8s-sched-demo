@@ -12,7 +12,7 @@ func ProvideK8sClient(cfg *config.Config) (service.K8sClientInterface, error) {
 		return NewMockK8sClient(), nil
 	}
 
-	return NewK8sClient()
+	return NewK8sClient(cfg)
 }
 
 // Module provides the K8s client dependency to the fx container

@@ -34,6 +34,7 @@ type KubernetesConfig struct {
 	Kubeconfig string
 	MockMode   bool
 	Namespace  string
+	UseGvisor  bool // Whether to enforce gVisor runtime for sandboxes
 }
 
 // SandboxConfig contains sandbox management configuration
@@ -59,6 +60,7 @@ func LoadConfig() (*Config, error) {
 		Kubernetes: KubernetesConfig{
 			MockMode:  true,
 			Namespace: "sandbox", // Default namespace
+			UseGvisor: false,     // Default to not using gVisor
 		},
 		Sandbox: SandboxConfig{
 			CleanupIntervalSecs: 60,
@@ -78,6 +80,7 @@ func LoadConfig() (*Config, error) {
 	flag.StringVar(&cfg.Kubernetes.Kubeconfig, "kubeconfig", cfg.Kubernetes.Kubeconfig, "Path to kubeconfig file (for testing outside the cluster)")
 	flag.BoolVar(&cfg.Kubernetes.MockMode, "mock", cfg.Kubernetes.MockMode, "Use mock K8s client for testing")
 	flag.StringVar(&cfg.Kubernetes.Namespace, "namespace", cfg.Kubernetes.Namespace, "Kubernetes namespace to use for sandboxes")
+	flag.BoolVar(&cfg.Kubernetes.UseGvisor, "use-gvisor", cfg.Kubernetes.UseGvisor, "Use gVisor runtime for isolation")
 
 	flag.IntVar(&cfg.Sandbox.CleanupIntervalSecs, "cleanup-interval", cfg.Sandbox.CleanupIntervalSecs, "Interval in seconds between expired sandbox cleanup runs")
 	flag.IntVar(&cfg.Sandbox.CleanupBatchSize, "cleanup-batch-size", cfg.Sandbox.CleanupBatchSize, "Maximum number of expired sandboxes to clean up in each batch")
@@ -105,6 +108,10 @@ func LoadConfig() (*Config, error) {
 
 	if env := os.Getenv("SCHEDULER_NAMESPACE"); env != "" {
 		cfg.Kubernetes.Namespace = env
+	}
+
+	if env := os.Getenv("SCHEDULER_USE_GVISOR"); env != "" {
+		cfg.Kubernetes.UseGvisor = env == "true" || env == "1"
 	}
 
 	if env := os.Getenv("SCHEDULER_CLEANUP_INTERVAL"); env != "" {

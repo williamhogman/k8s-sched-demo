@@ -2,8 +2,12 @@ package k8sclient
 
 import (
 	"context"
-	"fmt"
 	"log"
+)
+
+// Default values for mock client
+const (
+	DefaultNamespace = "sandbox"
 )
 
 // MockK8sClient is a mock implementation of the Kubernetes client for testing
@@ -27,33 +31,12 @@ func (m *MockK8sClient) SetNamespace(namespace string) {
 
 // ScheduleSandbox simulates scheduling a sandbox on Kubernetes
 func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
-	// Use the client's namespace
-	namespace := m.namespace
-
-	// Print the scheduling details for debugging
-	log.Printf("[MOCK] Scheduling sandbox with name %s in namespace %s", podName, namespace)
-	log.Printf("[MOCK] Metadata: %v", metadata)
-	log.Printf("[MOCK] Using default resources - CPU: %s, Memory: %s", DefaultCPU, DefaultMemory)
-
-	// Simulate creating a pod
-	log.Printf("[MOCK] Created pod %s in namespace %s", podName, namespace)
-
+	log.Printf("[MOCK] Pod %s scheduled", podName)
 	return podName, nil
 }
 
 // ReleaseSandbox simulates releasing a sandbox on Kubernetes
 func (m *MockK8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
-	// Check if the sandbox ID starts with "sandbox-" prefix, if not, prepend it
-	podName := sandboxID
-	if len(podName) > 8 && podName[:8] != "sandbox-" {
-		podName = fmt.Sprintf("sandbox-%s", sandboxID)
-	}
-
-	// Print the release details for debugging
-	log.Printf("[MOCK] Releasing sandbox with ID %s in namespace %s", podName, m.namespace)
-
-	// Simulate deleting a pod
-	log.Printf("[MOCK] Deleted pod %s from namespace %s", podName, m.namespace)
-
+	log.Printf("[MOCK] Pod %s released", sandboxID)
 	return nil
 }
