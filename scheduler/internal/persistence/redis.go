@@ -1,4 +1,4 @@
-package idempotence
+package persistence
 
 import (
 	"context"

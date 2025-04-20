@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/idempotence"
+	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 )
 
 // K8sClientInterface defines the interface for Kubernetes client
@@ -20,7 +20,7 @@ type K8sClientInterface interface {
 // SchedulerService implements the scheduling service logic
 type SchedulerService struct {
 	k8sClient         K8sClientInterface
-	idempotenceStore  idempotence.Store
+	idempotenceStore  persistence.Store
 	idempotenceKeyTTL time.Duration
 	sandboxTTL        time.Duration
 }
@@ -32,7 +32,7 @@ type SchedulerServiceConfig struct {
 }
 
 // NewSchedulerService creates a new scheduler service
-func NewSchedulerService(k8sClient K8sClientInterface, idempotenceStore idempotence.Store, config SchedulerServiceConfig) *SchedulerService {
+func NewSchedulerService(k8sClient K8sClientInterface, idempotenceStore persistence.Store, config SchedulerServiceConfig) *SchedulerService {
 	keyTTL := config.IdempotenceKeyTTL
 	if keyTTL == 0 {
 		keyTTL = 2 * time.Minute // Default TTL for idempotence keys
@@ -86,7 +86,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 			log.Printf("WARNING: Invalid or truncated sandbox ID found in store: %s, regenerating", sandboxID)
 			// Continue to re-create the sandbox as the stored one is invalid
 		}
-	} else if err != nil && err != idempotence.ErrNotFound {
+	} else if err != nil && err != persistence.ErrNotFound {
 		// Only log actual errors, not key not found
 		log.Printf("Error when checking idempotence key %s: %v", idempotenceKey, err)
 	}
