@@ -10,6 +10,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.7.3
 	github.com/stretchr/testify v1.10.0
+	go.uber.org/fx v1.23.0
+	go.uber.org/zap v1.26.0
 	golang.org/x/net v0.38.0
 	google.golang.org/protobuf v1.36.6
 	k8s.io/api v0.29.3
@@ -45,6 +47,8 @@ require (
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
+	go.uber.org/dig v1.18.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/oauth2 v0.25.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/term v0.31.0 // indirect

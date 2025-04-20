@@ -12,6 +12,7 @@ import (
 
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
 	"github.com/williamhogman/k8s-sched-demo/gen/will/scheduler/v1/schedulerv1connect"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
 )
 
@@ -115,14 +116,14 @@ func (s *SchedulerServer) RetainSandbox(
 }
 
 // StartServer starts the HTTP server with Connect API handlers
-func StartServer(cfg *Config, server *SchedulerServer) error {
+func StartServer(cfg *config.Config, server *SchedulerServer) error {
 	// Set up the HTTP routes with Connect handlers
 	mux := http.NewServeMux()
 	path, handler := schedulerv1connect.NewSandboxSchedulerHandler(server)
 	mux.Handle(path, handler)
 
 	// Start the server
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("Starting Scheduler server with Connect API on %s", addr)
 	return http.ListenAndServe(
 		addr,

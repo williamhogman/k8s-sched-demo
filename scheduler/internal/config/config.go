@@ -1,0 +1,134 @@
+package config
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"go.uber.org/fx"
+)
+
+// Config holds all configuration for the scheduler service
+type Config struct {
+	// Server settings
+	Server ServerConfig
+
+	// Kubernetes settings
+	Kubernetes KubernetesConfig
+
+	// Sandbox settings
+	Sandbox SandboxConfig
+
+	// Idempotence store settings
+	Idempotence IdempotenceConfig
+}
+
+// ServerConfig contains server-specific configuration
+type ServerConfig struct {
+	Port int
+}
+
+// KubernetesConfig contains Kubernetes client configuration
+type KubernetesConfig struct {
+	Kubeconfig string
+	MockMode   bool
+}
+
+// SandboxConfig contains sandbox management configuration
+type SandboxConfig struct {
+	CleanupIntervalSecs int
+	CleanupBatchSize    int
+	TTL                 time.Duration
+}
+
+// IdempotenceConfig contains configuration for the idempotence store
+type IdempotenceConfig struct {
+	Type     string
+	RedisURI string
+	TTL      time.Duration
+}
+
+// LoadConfig loads configuration from environment variables and command line flags
+func LoadConfig() (*Config, error) {
+	cfg := &Config{
+		Server: ServerConfig{
+			Port: 50052,
+		},
+		Kubernetes: KubernetesConfig{
+			MockMode: true,
+		},
+		Sandbox: SandboxConfig{
+			CleanupIntervalSecs: 60,
+			CleanupBatchSize:    50,
+			TTL:                 15 * time.Minute,
+		},
+		Idempotence: IdempotenceConfig{
+			Type:     "memory",
+			RedisURI: "redis://localhost:6379/0",
+			TTL:      24 * time.Hour,
+		},
+	}
+
+	// Parse command-line flags
+	flag.IntVar(&cfg.Server.Port, "port", cfg.Server.Port, "The server port")
+
+	flag.StringVar(&cfg.Kubernetes.Kubeconfig, "kubeconfig", cfg.Kubernetes.Kubeconfig, "Path to kubeconfig file (for testing outside the cluster)")
+	flag.BoolVar(&cfg.Kubernetes.MockMode, "mock", cfg.Kubernetes.MockMode, "Use mock K8s client for testing")
+
+	flag.IntVar(&cfg.Sandbox.CleanupIntervalSecs, "cleanup-interval", cfg.Sandbox.CleanupIntervalSecs, "Interval in seconds between expired sandbox cleanup runs")
+	flag.IntVar(&cfg.Sandbox.CleanupBatchSize, "cleanup-batch-size", cfg.Sandbox.CleanupBatchSize, "Maximum number of expired sandboxes to clean up in each batch")
+	flag.DurationVar(&cfg.Sandbox.TTL, "sandbox-ttl", cfg.Sandbox.TTL, "Default TTL for sandboxes")
+
+	flag.StringVar(&cfg.Idempotence.Type, "idempotence", cfg.Idempotence.Type, "Idempotence store type: 'memory' or 'redis'")
+	flag.StringVar(&cfg.Idempotence.RedisURI, "redis-uri", cfg.Idempotence.RedisURI, "Redis connection URI for idempotence store")
+	flag.DurationVar(&cfg.Idempotence.TTL, "idempotence-ttl", cfg.Idempotence.TTL, "TTL for idempotence keys")
+
+	// Override with environment variables if present
+	if env := os.Getenv("SCHEDULER_PORT"); env != "" {
+		var port int
+		if _, err := fmt.Sscanf(env, "%d", &port); err == nil {
+			cfg.Server.Port = port
+		}
+	}
+
+	if env := os.Getenv("SCHEDULER_MOCK"); env != "" {
+		cfg.Kubernetes.MockMode = env == "true" || env == "1"
+	}
+
+	if env := os.Getenv("SCHEDULER_KUBECONFIG"); env != "" {
+		cfg.Kubernetes.Kubeconfig = env
+	}
+
+	if env := os.Getenv("SCHEDULER_CLEANUP_INTERVAL"); env != "" {
+		var interval int
+		if _, err := fmt.Sscanf(env, "%d", &interval); err == nil {
+			cfg.Sandbox.CleanupIntervalSecs = interval
+		}
+	}
+
+	if env := os.Getenv("SCHEDULER_CLEANUP_BATCH_SIZE"); env != "" {
+		var batchSize int
+		if _, err := fmt.Sscanf(env, "%d", &batchSize); err == nil {
+			cfg.Sandbox.CleanupBatchSize = batchSize
+		}
+	}
+
+	if env := os.Getenv("SCHEDULER_IDEMPOTENCE_TYPE"); env != "" {
+		cfg.Idempotence.Type = env
+	}
+
+	if env := os.Getenv("SCHEDULER_REDIS_URI"); env != "" {
+		cfg.Idempotence.RedisURI = env
+	}
+
+	// Parse flags after setting environment variables to allow flags to override env vars
+	flag.Parse()
+
+	return cfg, nil
+}
+
+// Module provides the config dependency to the fx container
+var Module = fx.Options(
+	fx.Provide(LoadConfig),
+)
