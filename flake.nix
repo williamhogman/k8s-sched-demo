@@ -44,10 +44,14 @@
             kubectl
             kubernetes-helm
             
+            # Database
+            redis   # Add Redis for state management
+            
             # Misc tools
             gnumake
             ncurses # For the tput command
             netcat  # For the nc command
+            jq      # For JSON processing
             
             # Direnv support
             direnv
@@ -78,6 +82,7 @@
             echo "🚀 Welcome to K8s Scheduler Demo development environment!"
             echo "📦 Go $(go version | awk '{print $3}') is available"
             echo "🧰 Development tools installed: buf, protoc, gopls, golangci-lint, xh"
+            echo "💾 Redis server available: $(redis-server --version | head -n 1)"
             echo ""
             echo "Quick commands:"
             echo "  make build         - Build the project"

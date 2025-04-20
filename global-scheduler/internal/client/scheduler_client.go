@@ -14,7 +14,9 @@ import (
 
 // SchedulerClientInterface defines the interface for scheduler client
 type SchedulerClientInterface interface {
-	ScheduleSandbox(ctx context.Context, endpoint string, sandboxID string, namespace string, config map[string]string) (*schedulerv1.ScheduleResponse, error)
+	ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, namespace string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error)
+	ReleaseSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.ReleaseSandboxResponse, error)
+	RetainSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.RetainSandboxResponse, error)
 }
 
 // SchedulerClient is a client for the scheduler service
@@ -32,7 +34,7 @@ func NewSchedulerClient() *SchedulerClient {
 }
 
 // ScheduleSandbox schedules a sandbox on a selected cluster using Connect RPC
-func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, sandboxID string, namespace string, config map[string]string) (*schedulerv1.ScheduleResponse, error) {
+func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, namespace string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error) {
 	// Create the Connect client
 	baseURL := fmt.Sprintf("http://%s", endpoint)
 	client := schedulerv1connect.NewSandboxSchedulerClient(
@@ -42,16 +44,64 @@ func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, 
 
 	// Create the request
 	req := connect.NewRequest(&schedulerv1.ScheduleRequest{
-		SandboxId:     sandboxID,
-		Namespace:     namespace,
-		Configuration: config,
+		IdempotenceKey: idempotenceKey,
+		Namespace:      namespace,
+		Metadata:       metadata,
 	})
 
 	// Make the request
-	log.Printf("Scheduling sandbox %s at endpoint %s", sandboxID, endpoint)
+	log.Printf("Scheduling sandbox with key %s at endpoint %s", idempotenceKey, endpoint)
 	resp, err := client.ScheduleSandbox(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to schedule sandbox: %v", err)
+	}
+
+	return resp.Msg, nil
+}
+
+// ReleaseSandbox releases a sandbox on a selected cluster using Connect RPC
+func (c *SchedulerClient) ReleaseSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.ReleaseSandboxResponse, error) {
+	// Create the Connect client
+	baseURL := fmt.Sprintf("http://%s", endpoint)
+	client := schedulerv1connect.NewSandboxSchedulerClient(
+		c.httpClient,
+		baseURL,
+	)
+
+	// Create the request
+	req := connect.NewRequest(&schedulerv1.ReleaseSandboxRequest{
+		SandboxId: sandboxID,
+	})
+
+	// Make the request
+	log.Printf("Releasing sandbox %s at endpoint %s", sandboxID, endpoint)
+	resp, err := client.ReleaseSandbox(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to release sandbox: %v", err)
+	}
+
+	return resp.Msg, nil
+}
+
+// RetainSandbox extends the expiration time of a sandbox on a selected cluster using Connect RPC
+func (c *SchedulerClient) RetainSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.RetainSandboxResponse, error) {
+	// Create the Connect client
+	baseURL := fmt.Sprintf("http://%s", endpoint)
+	client := schedulerv1connect.NewSandboxSchedulerClient(
+		c.httpClient,
+		baseURL,
+	)
+
+	// Create the request
+	req := connect.NewRequest(&schedulerv1.RetainSandboxRequest{
+		SandboxId: sandboxID,
+	})
+
+	// Make the request
+	log.Printf("Retaining sandbox %s at endpoint %s", sandboxID, endpoint)
+	resp, err := client.RetainSandbox(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retain sandbox: %v", err)
 	}
 
 	return resp.Msg, nil

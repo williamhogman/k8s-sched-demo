@@ -7,31 +7,65 @@ option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/schedul
 service SandboxScheduler {
   // ScheduleSandbox schedules a sandbox workload on the cluster
   rpc ScheduleSandbox (ScheduleRequest) returns (ScheduleResponse) {}
+  // ReleaseSandbox releases a previously scheduled sandbox
+  rpc ReleaseSandbox (ReleaseSandboxRequest) returns (ReleaseSandboxResponse) {}
+  // RetainSandbox extends the expiration time of a sandbox
+  rpc RetainSandbox (RetainSandboxRequest) returns (RetainSandboxResponse) {}
 }
 
 // ScheduleRequest contains information needed to schedule a sandbox
 message ScheduleRequest {
-  // Unique identifier for the sandbox
-  string sandbox_id = 1;
-  // Namespace to create the sandbox in
+  // Idempotence key to ensure safe operation repeatability
+  string idempotence_key = 1;
+  
+  // Namespace to create the sandbox in (optional, defaults to system default)
   string namespace = 2;
-  // Additional configuration for the sandbox
-  map<string, string> configuration = 4;
+  
+  // Metadata for the sandbox
+  map<string, string> metadata = 3;
 }
 
 // ScheduleResponse contains information about the scheduled sandbox
 message ScheduleResponse {
-  // Status of the scheduling operation
-  ScheduleStatus status = 1;
-  // Error message, if any
-  string error_message = 2;
-  // Kubernetes resource name created
-  string resource_name = 3;
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+  
+  // ID of the scheduled sandbox (only set if success is true)
+  string sandbox_id = 3;
+} 
+
+message ReleaseSandboxRequest {
+  // ID of the cluster where the sandbox was scheduled
+  string cluster_id = 1;
+  // ID of the sandbox to release
+  string sandbox_id = 2;
 }
 
-// ScheduleStatus represents the status of a scheduling operation
-enum ScheduleStatus {
-  SCHEDULE_STATUS_UNSPECIFIED = 0;
-  SCHEDULE_STATUS_SCHEDULED = 1;
-  SCHEDULE_STATUS_FAILED = 2;
-} 
+message ReleaseSandboxResponse {
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+}
+
+// RetainSandboxRequest contains information needed to extend a sandbox's expiration
+message RetainSandboxRequest {
+  // ID of the sandbox to retain
+  string sandbox_id = 1;
+}
+
+// RetainSandboxResponse contains information about the retained sandbox
+message RetainSandboxResponse {
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+  
+  // New expiration time of the sandbox (Unix timestamp)
+  int64 expiration_time = 3;
+}

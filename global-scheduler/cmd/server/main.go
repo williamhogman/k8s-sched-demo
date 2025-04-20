@@ -36,26 +36,10 @@ func (s *GlobalSchedulerServer) GetSandbox(
 ) (*connect.Response[selectorv1.GetSandboxResponse], error) {
 	log.Println("Request headers:", req.Header())
 
-	// Convert from the new proto definition type to the old one that the service expects
-	clusterSelectorReq := &selectorv1.GetSandboxRequest{
-		SandboxId:     req.Msg.SandboxId,
-		Configuration: req.Msg.Configuration,
-	}
-
-	// Call the selector service using the old type
-	clusterSelectorResp, err := s.selectorService.GetSandbox(ctx, clusterSelectorReq)
+	// Pass the request directly to the service
+	resp, err := s.selectorService.GetSandbox(ctx, req.Msg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("service error: %v", err))
-	}
-
-	// Convert back from old response type to new response type
-	resp := &selectorv1.GetSandboxResponse{
-		Status:          clusterSelectorResp.Status,
-		ErrorMessage:    clusterSelectorResp.ErrorMessage,
-		SandboxId:       clusterSelectorResp.SandboxId,
-		ResourceName:    clusterSelectorResp.ResourceName,
-		ClusterId:       clusterSelectorResp.ClusterId,
-		ClusterEndpoint: clusterSelectorResp.ClusterEndpoint,
 	}
 
 	// Build the Connect response
@@ -64,6 +48,47 @@ func (s *GlobalSchedulerServer) GetSandbox(
 
 	return connectResp, nil
 }
+
+// ReleaseSandbox implements the ReleaseSandbox method from the GlobalScheduler service
+func (s *GlobalSchedulerServer) ReleaseSandbox(
+	ctx context.Context,
+	req *connect.Request[selectorv1.ReleaseSandboxRequest],
+) (*connect.Response[selectorv1.ReleaseSandboxResponse], error) {
+	log.Println("Request headers:", req.Header())
+
+	// Pass the request directly to the service
+	resp, err := s.selectorService.ReleaseSandbox(ctx, req.Msg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("service error: %v", err))
+	}
+
+	// Build the Connect response
+	connectResp := connect.NewResponse(resp)
+	connectResp.Header().Set("Global-Scheduler-Version", "v1")
+
+	return connectResp, nil
+}
+
+// RetainSandbox implements the RetainSandbox method from the GlobalScheduler service
+func (s *GlobalSchedulerServer) RetainSandbox(
+	ctx context.Context,
+	req *connect.Request[selectorv1.RetainSandboxRequest],
+) (*connect.Response[selectorv1.RetainSandboxResponse], error) {
+	log.Println("Request headers:", req.Header())
+
+	// Pass the request directly to the service
+	resp, err := s.selectorService.RetainSandbox(ctx, req.Msg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("service error: %v", err))
+	}
+
+	// Build the Connect response
+	connectResp := connect.NewResponse(resp)
+	connectResp.Header().Set("Global-Scheduler-Version", "v1")
+
+	return connectResp, nil
+}
+
 func main() {
 	flag.Parse()
 

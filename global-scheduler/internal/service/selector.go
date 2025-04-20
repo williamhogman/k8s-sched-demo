@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"time"
 
 	selectorv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/global-scheduler/v1"
-	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
 	"github.com/williamhogman/k8s-sched-demo/global-scheduler/internal/client"
 	"github.com/williamhogman/k8s-sched-demo/global-scheduler/internal/models"
 )
@@ -32,19 +30,21 @@ func NewSelectorService(clusters map[string]*models.Cluster, schedulerClient cli
 // GetSandbox implements the HTTP endpoint that handles both selecting a cluster
 // and scheduling a sandbox in one call
 func (s *SelectorService) GetSandbox(ctx context.Context, req *selectorv1.GetSandboxRequest) (*selectorv1.GetSandboxResponse, error) {
-	// Generate a sandbox ID if one is not provided
-	sandboxID := req.SandboxId
-	if sandboxID == "" {
-		sandboxID = fmt.Sprintf("sandbox-%d", time.Now().Unix())
+	// Extract idempotence key
+	idempotenceKey := req.IdempotenceKey
+	if idempotenceKey == "" {
+		return &selectorv1.GetSandboxResponse{
+			Success: false,
+			Error:   "idempotence key cannot be empty",
+		}, nil
 	}
 
 	// Get all available clusters
 	clusters := s.clusters
 	if len(clusters) == 0 {
 		return &selectorv1.GetSandboxResponse{
-			Status:       selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_FAILED,
-			ErrorMessage: "no clusters available",
-			SandboxId:    sandboxID,
+			Success: false,
+			Error:   "no clusters available",
 		}, nil
 	}
 
@@ -58,9 +58,8 @@ func (s *SelectorService) GetSandbox(ctx context.Context, req *selectorv1.GetSan
 	priorityGroups := groupClustersByPriority(clusterSlice)
 	if len(priorityGroups) == 0 {
 		return &selectorv1.GetSandboxResponse{
-			Status:       selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_FAILED,
-			ErrorMessage: "failed to group clusters by priority",
-			SandboxId:    sandboxID,
+			Success: false,
+			Error:   "failed to group clusters by priority",
 		}, nil
 	}
 
@@ -76,9 +75,8 @@ func (s *SelectorService) GetSandbox(ctx context.Context, req *selectorv1.GetSan
 		selectedCluster = weightedRandomSelection(highestPriorityGroup)
 		if selectedCluster == nil {
 			return &selectorv1.GetSandboxResponse{
-				Status:       selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_FAILED,
-				ErrorMessage: "failed to select a cluster with weighted random selection",
-				SandboxId:    sandboxID,
+				Success: false,
+				Error:   "failed to select a cluster with weighted random selection",
 			}, nil
 		}
 	}
@@ -90,38 +88,129 @@ func (s *SelectorService) GetSandbox(ctx context.Context, req *selectorv1.GetSan
 	scheduleResp, err := s.schedulerClient.ScheduleSandbox(
 		ctx,
 		selectedCluster.Endpoint,
-		sandboxID,
+		idempotenceKey,
 		namespace,
-		req.Configuration,
+		req.Metadata,
 	)
 	if err != nil {
 		return &selectorv1.GetSandboxResponse{
-			Status:          selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_FAILED,
-			ErrorMessage:    fmt.Sprintf("failed to schedule sandbox: %v", err),
-			SandboxId:       sandboxID,
-			ClusterId:       selectedCluster.ClusterID,
-			ClusterEndpoint: selectedCluster.Endpoint,
+			Success: false,
+			Error:   fmt.Sprintf("failed to schedule sandbox: %v", err),
 		}, nil
 	}
 
-	// Check the scheduling status
-	if scheduleResp.Status != schedulerv1.ScheduleStatus_SCHEDULE_STATUS_SCHEDULED {
+	// Check if scheduling was successful
+	if !scheduleResp.Success {
 		return &selectorv1.GetSandboxResponse{
-			Status:          selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_FAILED,
-			ErrorMessage:    scheduleResp.ErrorMessage,
-			SandboxId:       sandboxID,
-			ClusterId:       selectedCluster.ClusterID,
-			ClusterEndpoint: selectedCluster.Endpoint,
+			Success: false,
+			Error:   scheduleResp.Error,
 		}, nil
 	}
 
-	// Return successful response with all details
+	// Return successful response with sandbox ID and cluster ID
 	return &selectorv1.GetSandboxResponse{
-		Status:          selectorv1.GetSandboxStatus_GET_SANDBOX_STATUS_SUCCEEDED,
-		SandboxId:       sandboxID,
-		ResourceName:    scheduleResp.ResourceName,
-		ClusterId:       selectedCluster.ClusterID,
-		ClusterEndpoint: selectedCluster.Endpoint,
+		Success:   true,
+		SandboxId: scheduleResp.SandboxId,
+		ClusterId: selectedCluster.ClusterID,
+	}, nil
+}
+
+// ReleaseSandbox handles releasing a sandbox from a specific cluster
+func (s *SelectorService) ReleaseSandbox(ctx context.Context, req *selectorv1.ReleaseSandboxRequest) (*selectorv1.ReleaseSandboxResponse, error) {
+	// Extract sandbox ID and cluster ID
+	sandboxID := req.SandboxId
+	clusterID := req.ClusterId
+
+	if sandboxID == "" {
+		return &selectorv1.ReleaseSandboxResponse{
+			Success: false,
+			Error:   "sandbox ID cannot be empty",
+		}, nil
+	}
+
+	if clusterID == "" {
+		return &selectorv1.ReleaseSandboxResponse{
+			Success: false,
+			Error:   "cluster ID cannot be empty",
+		}, nil
+	}
+
+	// Find the cluster with the given ID
+	cluster, ok := s.clusters[clusterID]
+	if !ok {
+		return &selectorv1.ReleaseSandboxResponse{
+			Success: false,
+			Error:   fmt.Sprintf("cluster with ID %s not found", clusterID),
+		}, nil
+	}
+
+	// Call the scheduler service to release the sandbox
+	releaseResp, err := s.schedulerClient.ReleaseSandbox(
+		ctx,
+		cluster.Endpoint,
+		sandboxID,
+	)
+	if err != nil {
+		return &selectorv1.ReleaseSandboxResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to release sandbox: %v", err),
+		}, nil
+	}
+
+	// Return the response from the scheduler
+	return &selectorv1.ReleaseSandboxResponse{
+		Success: releaseResp.Success,
+		Error:   releaseResp.Error,
+	}, nil
+}
+
+// RetainSandbox handles extending the expiration time of a sandbox in a specific cluster
+func (s *SelectorService) RetainSandbox(ctx context.Context, req *selectorv1.RetainSandboxRequest) (*selectorv1.RetainSandboxResponse, error) {
+	// Extract sandbox ID and cluster ID
+	sandboxID := req.SandboxId
+	clusterID := req.ClusterId
+
+	if sandboxID == "" {
+		return &selectorv1.RetainSandboxResponse{
+			Success: false,
+			Error:   "sandbox ID cannot be empty",
+		}, nil
+	}
+
+	if clusterID == "" {
+		return &selectorv1.RetainSandboxResponse{
+			Success: false,
+			Error:   "cluster ID cannot be empty",
+		}, nil
+	}
+
+	// Find the cluster with the given ID
+	cluster, ok := s.clusters[clusterID]
+	if !ok {
+		return &selectorv1.RetainSandboxResponse{
+			Success: false,
+			Error:   fmt.Sprintf("cluster with ID %s not found", clusterID),
+		}, nil
+	}
+
+	// Call the scheduler service to retain the sandbox
+	retainResp, err := s.schedulerClient.RetainSandbox(
+		ctx,
+		cluster.Endpoint,
+		sandboxID,
+	)
+	if err != nil {
+		return &selectorv1.RetainSandboxResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to retain sandbox: %v", err),
+		}, nil
+	}
+
+	// Return the response from the scheduler
+	return &selectorv1.RetainSandboxResponse{
+		Success:        retainResp.Success,
+		Error:          retainResp.Error,
+		ExpirationTime: retainResp.ExpirationTime,
 	}, nil
 }
 

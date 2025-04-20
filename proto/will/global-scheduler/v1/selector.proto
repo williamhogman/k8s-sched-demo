@@ -7,35 +7,66 @@ option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/global-
 service ClusterSelector {
   // GetSandbox is a simplified endpoint that selects a cluster and schedules a sandbox in one call
   rpc GetSandbox (GetSandboxRequest) returns (GetSandboxResponse) {}
+  rpc ReleaseSandbox (ReleaseSandboxRequest) returns (ReleaseSandboxResponse) {}
+  rpc RetainSandbox (RetainSandboxRequest) returns (RetainSandboxResponse) {}
 }
 
 // GetSandboxRequest contains information needed to get a sandbox
 message GetSandboxRequest {
-  // Unique identifier for the sandbox (optional, will be generated if empty)
-  string sandbox_id = 1;
-  // Additional configuration for the sandbox
-  map<string, string> configuration = 2;
+  // Idempotence key to ensure safe operation repeatability
+  string idempotence_key = 1;
+  
+  // Metadata for the sandbox
+  map<string, string> metadata = 2;
 }
 
 // GetSandboxResponse contains information about the created sandbox
 message GetSandboxResponse {
-  // Status of the operation
-  GetSandboxStatus status = 1;
-  // Error message, if any
-  string error_message = 2;
-  // Sandbox ID used
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+  
+  // ID of the scheduled sandbox (only set if success is true)
   string sandbox_id = 3;
-  // Kubernetes resource name created
-  string resource_name = 4;
-  // Cluster ID where the sandbox was scheduled
-  string cluster_id = 5;
-  // Endpoint of the cluster where the sandbox was scheduled
-  string cluster_endpoint = 6;
+
+  // ID of the cluster where the sandbox was scheduled
+  string cluster_id = 4;
 }
 
-// GetSandboxStatus represents the status of a get sandbox operation
-enum GetSandboxStatus {
-  GET_SANDBOX_STATUS_UNSPECIFIED = 0;
-  GET_SANDBOX_STATUS_SUCCEEDED = 1;
-  GET_SANDBOX_STATUS_FAILED = 2;
-} 
+message ReleaseSandboxRequest {
+  // ID of the cluster where the sandbox was scheduled
+  string cluster_id = 1;
+  // ID of the sandbox to release
+  string sandbox_id = 2;  
+}
+
+
+message ReleaseSandboxResponse {
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+}
+
+// RetainSandboxRequest contains information needed to extend a sandbox's expiration
+message RetainSandboxRequest {
+  // ID of the cluster where the sandbox was scheduled
+  string cluster_id = 1;
+  // ID of the sandbox to retain
+  string sandbox_id = 2;
+}
+
+// RetainSandboxResponse contains information about the retained sandbox
+message RetainSandboxResponse {
+  // Whether the operation was successful
+  bool success = 1;
+  
+  // Error message if unsuccessful
+  string error = 2;
+  
+  // New expiration time of the sandbox (Unix timestamp)
+  int64 expiration_time = 3;
+}

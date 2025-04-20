@@ -70,3 +70,4 @@ dist/
 .config/
 result
 result-* 
+dump.rdb

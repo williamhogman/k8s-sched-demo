@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -59,17 +60,16 @@ func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
 }
 
 // ScheduleSandbox creates a pod for the sandbox
-func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID, namespace string, config map[string]string) (string, error) {
+func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName, namespace string, metadata map[string]string) (string, error) {
 	// Create pod labels
 	labels := map[string]string{
-		"app":        "sandbox",
-		"sandbox-id": sandboxID,
+		"app": "sandbox",
 	}
 
-	// Add configuration as labels
-	for key, value := range config {
+	// Add metadata as labels
+	for key, value := range metadata {
 		if key != "" && value != "" {
-			labels[fmt.Sprintf("sandbox-config-%s", key)] = value
+			labels[fmt.Sprintf("sandbox-metadata-%s", key)] = value
 		}
 	}
 
@@ -88,7 +88,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID, namespace st
 	// Create the pod object
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("sandbox-%s", sandboxID),
+			Name:      podName,
 			Namespace: namespace,
 			Labels:    labels,
 		},
@@ -96,7 +96,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID, namespace st
 			Containers: []corev1.Container{
 				{
 					Name:      "sandbox-container",
-					Image:     getImageFromConfig(config),
+					Image:     getImageFromMetadata(metadata),
 					Resources: resourceRequirements,
 				},
 			},
@@ -113,6 +113,37 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID, namespace st
 	go k.watchPodStatus(namespace, createdPod.Name)
 
 	return createdPod.Name, nil
+}
+
+// ReleaseSandbox deletes a sandbox pod
+func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
+	// Check if the sandbox ID starts with "sandbox-" prefix, if not, prepend it
+	podName := sandboxID
+	if len(podName) > 8 && podName[:8] != "sandbox-" {
+		podName = fmt.Sprintf("sandbox-%s", sandboxID)
+	}
+
+	// Default namespace if not specified in the ID
+	namespace := "default"
+
+	// If sandboxID contains namespace info (in format namespace/podName), extract it
+	if parts := strings.Split(podName, "/"); len(parts) == 2 {
+		namespace = parts[0]
+		podName = parts[1]
+	}
+
+	log.Printf("Deleting pod %s in namespace %s", podName, namespace)
+
+	// Delete options (can be adjusted as needed)
+	deleteOptions := metav1.DeleteOptions{}
+
+	// Delete the pod
+	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, podName, deleteOptions)
+	if err != nil {
+		return fmt.Errorf("failed to delete pod %s: %v", podName, err)
+	}
+
+	return nil
 }
 
 // watchPodStatus watches the pod status and logs events (simplified monitoring)
@@ -134,9 +165,9 @@ func (k *K8sClient) watchPodStatus(namespace, podName string) {
 	}
 }
 
-// Helper function to get image from config
-func getImageFromConfig(config map[string]string) string {
-	if image, ok := config["image"]; ok && image != "" {
+// Helper function to get image from metadata
+func getImageFromMetadata(metadata map[string]string) string {
+	if image, ok := metadata["image"]; ok && image != "" {
 		return image
 	}
 	return "busybox:latest" // Default image
