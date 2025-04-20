@@ -39,7 +39,6 @@ func (s *SchedulerServer) ScheduleSandbox(
 	podName, success, err := s.schedulerService.ScheduleSandbox(
 		ctx,
 		req.Msg.IdempotenceKey,
-		req.Msg.Namespace,
 		req.Msg.Metadata,
 	)
 

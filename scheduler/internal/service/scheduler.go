@@ -12,8 +12,9 @@ import (
 
 // K8sClientInterface defines the interface for Kubernetes client
 type K8sClientInterface interface {
-	ScheduleSandbox(ctx context.Context, podName, namespace string, metadata map[string]string) (string, error)
+	ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error)
 	ReleaseSandbox(ctx context.Context, sandboxID string) error
+	SetNamespace(namespace string)
 }
 
 // SchedulerService implements the scheduling service logic
@@ -41,16 +42,12 @@ func NewSchedulerService(k8sClient K8sClientInterface, store persistence.Store, 
 }
 
 // ScheduleSandbox handles scheduling a sandbox
-func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, namespace string, metadata map[string]string) (string, bool, error) {
+func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string, metadata map[string]string) (string, bool, error) {
 	if idempotenceKey == "" {
 		return "", false, fmt.Errorf("idempotence key cannot be empty")
 	}
 
-	if namespace == "" {
-		namespace = "default" // Use default namespace if not specified
-	}
-
-	log.Printf("Scheduling sandbox with key %s in namespace %s", idempotenceKey, namespace)
+	log.Printf("Scheduling sandbox with key %s", idempotenceKey)
 
 	// Check if we already have a sandbox for this idempotence key
 	sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
@@ -92,7 +89,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 	log.Printf("Generated pod name: %s for idempotence key: %s", podName, idempotenceKey)
 
 	// Schedule the sandbox on Kubernetes
-	podName, err = s.k8sClient.ScheduleSandbox(ctx, podName, namespace, metadata)
+	podName, err = s.k8sClient.ScheduleSandbox(ctx, podName, metadata)
 	if err != nil {
 		log.Printf("Failed to schedule sandbox with key %s: %v", idempotenceKey, err)
 		// Clean up the pending marker since creation failed

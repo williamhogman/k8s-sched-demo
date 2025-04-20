@@ -29,6 +29,7 @@ var (
 	releaseSandbox  = flag.Bool("release", false, "Whether to release the sandbox")
 	rawOutput       = flag.Bool("raw", false, "Output raw JSON responses")
 	verbose         = flag.Bool("verbose", false, "Enable verbose logging")
+	namespace       = flag.String("namespace", "sandbox", "Kubernetes namespace to use for sandboxes")
 )
 
 // Client wrapper for the selector service
@@ -192,6 +193,9 @@ func main() {
 		"purpose": "demo",
 		"owner":   "user",
 	}
+
+	// Log the namespace being used
+	logInfo("Using Kubernetes namespace: %s", *namespace)
 
 	// Make the first GetSandbox request
 	logInfo("Making API request to get a sandbox with key: %s", *idempotenceKey)

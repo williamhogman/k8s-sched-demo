@@ -81,15 +81,11 @@ func (s *SelectorService) GetSandbox(ctx context.Context, req *selectorv1.GetSan
 		}
 	}
 
-	// Create namespace based on cluster ID
-	namespace := ""
-
 	// Schedule the sandbox
 	scheduleResp, err := s.schedulerClient.ScheduleSandbox(
 		ctx,
 		selectedCluster.Endpoint,
 		idempotenceKey,
-		namespace,
 		req.Metadata,
 	)
 	if err != nil {

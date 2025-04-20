@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,10 +26,11 @@ const (
 // K8sClient is a wrapper around the Kubernetes client
 type K8sClient struct {
 	clientset *kubernetes.Clientset
+	namespace string
 }
 
 // NewK8sClient creates a new K8s client
-func NewK8sClient() (*K8sClient, error) {
+func NewK8sClient(cfg *config.Config) (*K8sClient, error) {
 	// Get kubeconfig from default location
 	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(os.Getenv("HOME"), ".kube", "config"))
 	if err != nil {
@@ -44,6 +45,7 @@ func NewK8sClient() (*K8sClient, error) {
 
 	return &K8sClient{
 		clientset: clientset,
+		namespace: cfg.Kubernetes.Namespace,
 	}, nil
 }
 
@@ -56,11 +58,21 @@ func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
 
 	return &K8sClient{
 		clientset: clientset,
+		namespace: "sandbox",
 	}, nil
 }
 
 // ScheduleSandbox creates a pod for the sandbox
-func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName, namespace string, metadata map[string]string) (string, error) {
+func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
+	// Use the client's namespace
+	namespace := k.namespace
+
+	// Ensure the namespace exists
+	err := k.ensureNamespaceExists(ctx, namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure namespace exists: %v", err)
+	}
+
 	// Create pod labels
 	labels := map[string]string{
 		"app": "sandbox",
@@ -123,15 +135,10 @@ func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error 
 		podName = fmt.Sprintf("sandbox-%s", sandboxID)
 	}
 
-	// Default namespace if not specified in the ID
-	namespace := "default"
+	// Always use the client's namespace
+	namespace := k.namespace
 
-	// If sandboxID contains namespace info (in format namespace/podName), extract it
-	if parts := strings.Split(podName, "/"); len(parts) == 2 {
-		namespace = parts[0]
-		podName = parts[1]
-	}
-
+	// Log deletion
 	log.Printf("Deleting pod %s in namespace %s", podName, namespace)
 
 	// Delete options (can be adjusted as needed)
@@ -163,6 +170,30 @@ func (k *K8sClient) watchPodStatus(namespace, podName string) {
 
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// ensureNamespaceExists checks if the namespace exists and creates it if it doesn't
+func (k *K8sClient) ensureNamespaceExists(ctx context.Context, namespace string) error {
+	_, err := k.clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err == nil {
+		// Namespace exists
+		return nil
+	}
+
+	// Create the namespace
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
+
+	_, err = k.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create namespace %s: %v", namespace, err)
+	}
+
+	log.Printf("Created namespace %s", namespace)
+	return nil
 }
 
 // Helper function to get image from metadata

@@ -18,11 +18,8 @@ message ScheduleRequest {
   // Idempotence key to ensure safe operation repeatability
   string idempotence_key = 1;
   
-  // Namespace to create the sandbox in (optional, defaults to system default)
-  string namespace = 2;
-  
   // Metadata for the sandbox
-  map<string, string> metadata = 3;
+  map<string, string> metadata = 2;
 }
 
 // ScheduleResponse contains information about the scheduled sandbox

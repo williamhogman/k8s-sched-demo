@@ -33,6 +33,7 @@ SANDBOX_TTL="15m"
 VERBOSE=false
 RAW_OUTPUT=false
 CLIENT_ONLY=false
+NAMESPACE="sandbox"
 
 # Array to keep track of background processes
 declare -a PIDS=()
@@ -101,6 +102,10 @@ while [[ $# -gt 0 ]]; do
       SANDBOX_TTL="$2"
       shift 2
       ;;
+    --namespace)
+      NAMESPACE="$2"
+      shift 2
+      ;;
     --verbose)
       VERBOSE=true
       shift
@@ -134,6 +139,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --redis-db        Set Redis database number (default: 0)"
       echo "  --idempotence-ttl Set TTL for idempotence keys (default: 24h)"
       echo "  --sandbox-ttl     Set TTL for sandboxes (default: 15m)"
+      echo "  --namespace       Kubernetes namespace to use for sandboxes (default: sandbox)"
       echo "  --verbose         Enable verbose logging"
       echo "  --raw             Output raw JSON responses"
       echo "  --client-only     Run only the demo client without starting services"
@@ -310,7 +316,7 @@ fi
 log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 
 # Construct scheduler command with Redis params if enabled
-SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL"
+SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE"
 if [ "$USE_REDIS" = true ]; then
   REDIS_URI="redis://:$REDIS_PASSWORD@$REDIS_ADDR/$REDIS_DB"
   SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=redis --redis-uri=$REDIS_URI --idempotence-ttl=$IDEMPOTENCE_TTL"
@@ -319,6 +325,9 @@ else
   SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=memory"
   log_info "Scheduler will run with in-memory idempotence store and sandbox TTL=$SANDBOX_TTL"
 fi
+
+# Log the namespace being used
+log_info "Using Kubernetes namespace: $NAMESPACE"
 
 # Execute scheduler command
 $SCHEDULER_CMD &

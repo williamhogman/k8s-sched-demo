@@ -14,7 +14,7 @@ import (
 
 // SchedulerClientInterface defines the interface for scheduler client
 type SchedulerClientInterface interface {
-	ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, namespace string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error)
+	ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error)
 	ReleaseSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.ReleaseSandboxResponse, error)
 	RetainSandbox(ctx context.Context, endpoint string, sandboxID string) (*schedulerv1.RetainSandboxResponse, error)
 }
@@ -34,7 +34,7 @@ func NewSchedulerClient() *SchedulerClient {
 }
 
 // ScheduleSandbox schedules a sandbox on a selected cluster using Connect RPC
-func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, namespace string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error) {
+func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, idempotenceKey string, metadata map[string]string) (*schedulerv1.ScheduleResponse, error) {
 	// Create the Connect client
 	baseURL := fmt.Sprintf("http://%s", endpoint)
 	client := schedulerv1connect.NewSandboxSchedulerClient(
@@ -45,7 +45,6 @@ func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, 
 	// Create the request
 	req := connect.NewRequest(&schedulerv1.ScheduleRequest{
 		IdempotenceKey: idempotenceKey,
-		Namespace:      namespace,
 		Metadata:       metadata,
 	})
 
