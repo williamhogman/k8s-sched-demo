@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +19,7 @@ type K8sClientInterface interface {
 // SchedulerService implements the scheduling service logic
 type SchedulerService struct {
 	k8sClient         K8sClientInterface
-	idempotenceStore  persistence.Store
+	store             persistence.Store
 	idempotenceKeyTTL time.Duration
 	sandboxTTL        time.Duration
 }
@@ -32,33 +31,13 @@ type SchedulerServiceConfig struct {
 }
 
 // NewSchedulerService creates a new scheduler service
-func NewSchedulerService(k8sClient K8sClientInterface, idempotenceStore persistence.Store, config SchedulerServiceConfig) *SchedulerService {
-	keyTTL := config.IdempotenceKeyTTL
-	if keyTTL == 0 {
-		keyTTL = 2 * time.Minute // Default TTL for idempotence keys
-	}
-
-	sandboxTTL := config.SandboxTTL
-	if sandboxTTL == 0 {
-		sandboxTTL = 15 * time.Minute // Default 15 minute TTL for sandboxes
-	}
-
+func NewSchedulerService(k8sClient K8sClientInterface, store persistence.Store, config SchedulerServiceConfig) *SchedulerService {
 	return &SchedulerService{
 		k8sClient:         k8sClient,
-		idempotenceStore:  idempotenceStore,
-		idempotenceKeyTTL: keyTTL,
-		sandboxTTL:        sandboxTTL,
+		store:             store,
+		idempotenceKeyTTL: config.IdempotenceKeyTTL,
+		sandboxTTL:        config.SandboxTTL,
 	}
-}
-
-// SetIdempotenceKeyTTL sets the time-to-live duration for idempotence keys
-func (s *SchedulerService) SetIdempotenceKeyTTL(ttl time.Duration) {
-	s.idempotenceKeyTTL = ttl
-}
-
-// SetSandboxTTL sets the time-to-live duration for sandboxes
-func (s *SchedulerService) SetSandboxTTL(ttl time.Duration) {
-	s.sandboxTTL = ttl
 }
 
 // ScheduleSandbox handles scheduling a sandbox
@@ -74,25 +53,18 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 	log.Printf("Scheduling sandbox with key %s in namespace %s", idempotenceKey, namespace)
 
 	// Check if we already have a sandbox for this idempotence key
-	sandboxID, err := s.idempotenceStore.GetSandboxID(ctx, idempotenceKey)
+	sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
 	if err == nil && sandboxID != "" {
 		// We found an existing sandbox for this idempotence key
 		log.Printf("Found existing sandbox with idempotence key %s: %s", idempotenceKey, sandboxID)
-
-		// Validate the sandbox ID is complete
-		if isValidSandboxID(sandboxID) {
-			return sandboxID, true, nil // Return the existing sandbox, not newly created
-		} else {
-			log.Printf("WARNING: Invalid or truncated sandbox ID found in store: %s, regenerating", sandboxID)
-			// Continue to re-create the sandbox as the stored one is invalid
-		}
+		return sandboxID, true, nil // Return the existing sandbox, not newly created
 	} else if err != nil && err != persistence.ErrNotFound {
 		// Only log actual errors, not key not found
 		log.Printf("Error when checking idempotence key %s: %v", idempotenceKey, err)
 	}
 
 	// Try to mark this idempotence key as pending creation to handle concurrent requests
-	marked, err := s.idempotenceStore.MarkPendingCreation(ctx, idempotenceKey, s.idempotenceKeyTTL)
+	marked, err := s.store.MarkPendingCreation(ctx, idempotenceKey, s.idempotenceKeyTTL)
 	if err != nil {
 		log.Printf("Error marking pending creation for key %s: %v", idempotenceKey, err)
 		// Continue anyway, worst case we create multiple sandboxes
@@ -104,8 +76,8 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 		for i := 0; i < 10; i++ { // Try up to 10 times
 			time.Sleep(200 * time.Millisecond) // Wait 200ms between checks
 
-			sandboxID, err := s.idempotenceStore.GetSandboxID(ctx, idempotenceKey)
-			if err == nil && sandboxID != "" && isValidSandboxID(sandboxID) {
+			sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
+			if err == nil && sandboxID != "" {
 				log.Printf("Found sandbox created by concurrent request: %s", sandboxID)
 				return sandboxID, false, nil
 			}
@@ -124,14 +96,14 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 	if err != nil {
 		log.Printf("Failed to schedule sandbox with key %s: %v", idempotenceKey, err)
 		// Clean up the pending marker since creation failed
-		if cleanupErr := s.idempotenceStore.ReleaseIdempotenceKey(ctx, idempotenceKey); cleanupErr != nil {
+		if cleanupErr := s.store.ReleaseIdempotenceKey(ctx, idempotenceKey); cleanupErr != nil {
 			log.Printf("Warning: failed to clean up pending marker: %v", cleanupErr)
 		}
 		return "", false, fmt.Errorf("failed to schedule: %v", err)
 	}
 
 	// Store the mapping from idempotence key to sandbox ID and complete the pending operation
-	if err := s.idempotenceStore.CompletePendingCreation(ctx, idempotenceKey, podName, s.idempotenceKeyTTL); err != nil {
+	if err := s.store.CompletePendingCreation(ctx, idempotenceKey, podName, s.idempotenceKeyTTL); err != nil {
 		// Just log the error, don't fail the request
 		log.Printf("Failed to store idempotence mapping: %v", err)
 	} else {
@@ -141,7 +113,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 
 	// Set the initial expiration time for the sandbox
 	expirationTime := time.Now().Add(s.sandboxTTL)
-	if err := s.idempotenceStore.SetSandboxExpiration(ctx, podName, expirationTime); err != nil {
+	if err := s.store.SetSandboxExpiration(ctx, podName, expirationTime); err != nil {
 		log.Printf("Warning: failed to set initial expiration for sandbox %s: %v", podName, err)
 		// Don't fail the request, just log the warning
 	} else {
@@ -150,51 +122,6 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey, 
 
 	log.Printf("Successfully scheduled sandbox with key %s as pod %s", idempotenceKey, podName)
 	return podName, true, nil
-}
-
-// isValidSandboxID checks if a sandbox ID is valid (not truncated or empty)
-func isValidSandboxID(id string) bool {
-	// Expected format: sandbox-xxxxxxxx where x is a hex digit
-	if id == "" {
-		return false
-	}
-
-	// Check if it starts with sandbox-
-	if len(id) < 16 || !strings.HasPrefix(id, "sandbox-") {
-		return false
-	}
-
-	// Extract the hex part
-	hexPart := id[8:]
-
-	// Should be 8 chars
-	if len(hexPart) != 8 {
-		return false
-	}
-
-	// All chars should be hexadecimal
-	for _, c := range hexPart {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// ensureValidSandboxID fixes a potentially invalid sandbox ID
-func ensureValidSandboxID(id string) string {
-	if isValidSandboxID(id) {
-		return id // Already valid
-	}
-
-	// If it's completely wrong, generate a new one
-	if !strings.HasPrefix(id, "sandbox-") {
-		return generatePodName()
-	}
-
-	// If it starts with sandbox- but the rest is invalid, fix the suffix
-	return "sandbox-" + fmt.Sprintf("%08x", uuid.New().ID())
 }
 
 // generatePodName creates a pod name with a standard prefix and a random suffix
@@ -223,7 +150,7 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 	log.Printf("Releasing sandbox with ID %s", sandboxID)
 
 	// Remove from the expiration tracking
-	if err := s.idempotenceStore.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
+	if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
 		log.Printf("Warning: failed to remove expiration for sandbox %s: %v", sandboxID, err)
 		// Continue with the release even if we fail to remove the expiration
 	}
@@ -236,7 +163,7 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 	}
 
 	// Mark the sandbox as released to avoid duplicate operations
-	if err := s.idempotenceStore.MarkSandboxReleased(ctx, sandboxID, 5*time.Minute); err != nil {
+	if err := s.store.MarkSandboxReleased(ctx, sandboxID, 5*time.Minute); err != nil {
 		log.Printf("Warning: failed to mark sandbox %s as released: %v", sandboxID, err)
 		// This is not critical, just a warning
 	}
@@ -254,7 +181,7 @@ func (s *SchedulerService) RetainSandbox(ctx context.Context, sandboxID string) 
 	log.Printf("Retaining sandbox with ID %s", sandboxID)
 
 	// Check if the sandbox was already released
-	released, err := s.idempotenceStore.IsSandboxReleased(ctx, sandboxID)
+	released, err := s.store.IsSandboxReleased(ctx, sandboxID)
 	if err != nil {
 		log.Printf("Error checking if sandbox %s is released: %v", sandboxID, err)
 		// Continue anyway, worst case we try to extend a released sandbox
@@ -264,7 +191,7 @@ func (s *SchedulerService) RetainSandbox(ctx context.Context, sandboxID string) 
 	}
 
 	// Extend the expiration time
-	newExpiration, err := s.idempotenceStore.ExtendSandboxExpiration(ctx, sandboxID, s.sandboxTTL)
+	newExpiration, err := s.store.ExtendSandboxExpiration(ctx, sandboxID, s.sandboxTTL)
 	if err != nil {
 		log.Printf("Failed to extend expiration for sandbox %s: %v", sandboxID, err)
 		return time.Time{}, false, fmt.Errorf("failed to extend expiration: %v", err)
@@ -284,7 +211,7 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 
 	// Get sandboxes that have expired
 	now := time.Now()
-	expiredSandboxes, err := s.idempotenceStore.GetExpiredSandboxes(ctx, now, batchSize)
+	expiredSandboxes, err := s.store.GetExpiredSandboxes(ctx, now, batchSize)
 	if err != nil {
 		log.Printf("Error getting expired sandboxes: %v", err)
 		return 0, fmt.Errorf("failed to get expired sandboxes: %v", err)
@@ -300,7 +227,7 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 	releasedCount := 0
 	for _, sandboxID := range expiredSandboxes {
 		// Check if already marked as released to avoid duplicate work
-		released, err := s.idempotenceStore.IsSandboxReleased(ctx, sandboxID)
+		released, err := s.store.IsSandboxReleased(ctx, sandboxID)
 		if err != nil {
 			log.Printf("Error checking if sandbox %s is released: %v", sandboxID, err)
 			// Continue to next sandbox
@@ -311,7 +238,7 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 			log.Printf("Sandbox %s is already marked as released, skipping", sandboxID)
 
 			// Remove from expiration tracking since it's already released
-			if err := s.idempotenceStore.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
+			if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
 				log.Printf("Warning: failed to remove expiration for released sandbox %s: %v", sandboxID, err)
 			}
 
@@ -339,8 +266,8 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 
 // Close cleans up resources used by the service
 func (s *SchedulerService) Close() error {
-	if s.idempotenceStore != nil {
-		return s.idempotenceStore.Close()
+	if s.store != nil {
+		return s.store.Close()
 	}
 	return nil
 }

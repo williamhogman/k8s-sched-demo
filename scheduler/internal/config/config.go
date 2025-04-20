@@ -66,7 +66,7 @@ func LoadConfig() (*Config, error) {
 		Idempotence: IdempotenceConfig{
 			Type:     "memory",
 			RedisURI: "redis://localhost:6379/0",
-			TTL:      24 * time.Hour,
+			TTL:      1 * time.Hour,
 		},
 	}
 
