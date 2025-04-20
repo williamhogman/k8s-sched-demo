@@ -30,6 +30,9 @@ REDIS_PASSWORD=""
 REDIS_DB=0
 IDEMPOTENCE_TTL="24h"
 SANDBOX_TTL="15m"
+VERBOSE=false
+RAW_OUTPUT=false
+CLIENT_ONLY=false
 
 # Array to keep track of background processes
 declare -a PIDS=()
@@ -98,6 +101,18 @@ while [[ $# -gt 0 ]]; do
       SANDBOX_TTL="$2"
       shift 2
       ;;
+    --verbose)
+      VERBOSE=true
+      shift
+      ;;
+    --raw)
+      RAW_OUTPUT=true
+      shift
+      ;;
+    --client-only)
+      CLIENT_ONLY=true
+      shift
+      ;;
     --help)
       echo "K8s Scheduler Demo"
       echo
@@ -119,6 +134,9 @@ while [[ $# -gt 0 ]]; do
       echo "  --redis-db        Set Redis database number (default: 0)"
       echo "  --idempotence-ttl Set TTL for idempotence keys (default: 24h)"
       echo "  --sandbox-ttl     Set TTL for sandboxes (default: 15m)"
+      echo "  --verbose         Enable verbose logging"
+      echo "  --raw             Output raw JSON responses"
+      echo "  --client-only     Run only the demo client without starting services"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -149,22 +167,47 @@ log_error() { echo -e "${RED}[$(date "+%Y-%m-%d %H:%M:%S") ERROR]${NC} $1"; }
 
 # Cleanup function to ensure all processes are terminated
 cleanup() {
-  log_info "Cleaning up resources..."
-  
-  # Kill all background processes in reverse order
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    pid=${PIDS[$i]}
-    if ps -p $pid > /dev/null; then
-      kill $pid 2>/dev/null || true
-      wait $pid 2>/dev/null || true
-    fi
-  done
-  
-  log_success "All processes have been terminated."
+  if [ "$CLIENT_ONLY" = false ]; then
+    log_info "Cleaning up resources..."
+    
+    # Kill all background processes in reverse order
+    for ((i=${#PIDS[@]}-1; i>=0; i--)); do
+      pid=${PIDS[$i]}
+      if ps -p $pid > /dev/null; then
+        kill $pid 2>/dev/null || true
+        wait $pid 2>/dev/null || true
+      fi
+    done
+    
+    log_success "All processes have been terminated."
+  fi
 }
 
 # Register the cleanup function for various signals
 trap cleanup EXIT INT TERM
+
+# Build the demo command arguments
+build_demo_args() {
+  local demo_args="--global-port=$GLOBAL_PORT"
+
+  if [ "$RETAIN_SANDBOX" = true ]; then
+    demo_args="$demo_args --retain --retain-count=$RETAIN_COUNT --retain-interval=$RETAIN_INTERVAL"
+  fi
+
+  if [ "$RELEASE_SANDBOX" = true ]; then
+    demo_args="$demo_args --release"
+  fi
+
+  if [ "$VERBOSE" = true ]; then
+    demo_args="$demo_args --verbose"
+  fi
+
+  if [ "$RAW_OUTPUT" = true ]; then
+    demo_args="$demo_args --raw"
+  fi
+
+  echo "$demo_args"
+}
 
 # Function to check if a service is ready
 check_service_port() {
@@ -190,6 +233,40 @@ check_service_port() {
   log_success "$service_name is ready on port $port!"
   return 0
 }
+
+# Build the project if not skipped
+if [ "$BUILD" = true ]; then
+  log_info "Building the project..."
+  
+  if [ "$CLIENT_ONLY" = true ]; then
+    # Just build the demo client if only running the client
+    go build -o bin/demo ./cmd/demo || { log_error "Demo client build failed!"; exit 1; }
+  else
+    # Build everything for the full demo
+    make build || { log_error "Build failed!"; exit 1; }
+  fi
+  
+  log_success "Build completed successfully!"
+else
+  log_info "Skipping build step..."
+fi
+
+if [ "$CLIENT_ONLY" = true ]; then
+  # When running in client-only mode, just verify services are running
+  if ! nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
+    log_warning "Global scheduler service does not appear to be running on port $GLOBAL_PORT!"
+    log_warning "The demo might fail if the service is not available."
+  fi
+  
+  # Run the demo client
+  log_info "Running the demo client in standalone mode..."
+  DEMO_ARGS=$(build_demo_args)
+  ./bin/demo $DEMO_ARGS
+  
+  exit 0
+fi
+
+# If we get here, we're running the full demo with services
 
 # Check if ports are already in use
 if nc -z localhost $SCHEDULER_PORT >/dev/null 2>&1; then
@@ -229,15 +306,6 @@ if [ "$USE_REDIS" = true ]; then
   fi
 fi
 
-# Build the project if not skipped
-if [ "$BUILD" = true ]; then
-  log_info "Building the project..."
-  make build || { log_error "Build failed!"; exit 1; }
-  log_success "Build completed successfully!"
-else
-  log_info "Skipping build step..."
-fi
-
 # Start the Scheduler service
 log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 
@@ -267,153 +335,10 @@ PIDS+=($!)
 # Check if the global scheduler service is ready
 check_service_port $GLOBAL_PORT "Global Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 
-# Run the API request using xh instead of client binary
-log_info "Making API request to get a sandbox..."
-
-SELECTOR_URL="http://localhost:$GLOBAL_PORT/selector.ClusterSelector/GetSandbox"
-
-# Generate a unique idempotenceKey using timestamp
-IDEMPOTENCE_KEY="demo-$(date +%s)"
-
-# Store first API call results to demonstrate idempotence
-log_info "First API call with idempotence key: $IDEMPOTENCE_KEY"
-
-# Prepare the request payload with jq
-REQUEST_PAYLOAD=$(jq -n \
-  --arg key "$IDEMPOTENCE_KEY" \
-  '{idempotenceKey: $key, metadata: {purpose: "demo", owner: "user"}}')
-
-# Using xh to make the Connect RPC call
-RESPONSE=$(xh POST $SELECTOR_URL \
-  Content-Type:application/json \
-  --raw "$REQUEST_PAYLOAD" \
-  --pretty=none) || { log_error "API request failed!"; exit 1; }
-
-# Pretty print the response JSON
-echo "$RESPONSE" | jq '.'
-
-# Extract values using jq
-if [[ $(echo "$RESPONSE" | jq 'has("sandboxId")') == "true" ]]; then
-  SANDBOX_ID=$(echo "$RESPONSE" | jq -r '.sandboxId')
-  CLUSTER_ID=$(echo "$RESPONSE" | jq -r '.clusterId')
-  log_success "Sandbox created successfully with ID: $SANDBOX_ID on cluster: $CLUSTER_ID"
-  
-  # If Redis is enabled, demonstrate idempotence
-  if [ "$USE_REDIS" = true ]; then
-    log_info "Waiting 2 seconds before making identical request to demonstrate idempotence..."
-    sleep 1
-    
-    log_info "Second API call with same idempotence key (should return same sandbox):"
-    
-    # Second call with same idempotence key
-    SECOND_RESPONSE=$(xh POST $SELECTOR_URL \
-      Content-Type:application/json \
-      --raw "$REQUEST_PAYLOAD" \
-      --pretty=none) || { log_error "Second API request failed!"; exit 1; }
-    
-    # Pretty print the second response JSON
-    echo "$SECOND_RESPONSE" | jq '.'
-    
-    # Extract values from second response using jq
-    if [[ $(echo "$SECOND_RESPONSE" | jq 'has("sandboxId")') == "true" ]]; then
-      SECOND_SANDBOX_ID=$(echo "$SECOND_RESPONSE" | jq -r '.sandboxId')
-      SECOND_CLUSTER_ID=$(echo "$SECOND_RESPONSE" | jq -r '.clusterId')
-      
-      # Check if it's the same sandbox
-      if [[ "$SANDBOX_ID" == "$SECOND_SANDBOX_ID" ]]; then
-        log_success "Idempotence verified: Second request returned the same sandbox ID ($SECOND_SANDBOX_ID)"
-        
-        # Log cluster ID info separately
-        if [[ "$CLUSTER_ID" != "$SECOND_CLUSTER_ID" ]]; then
-          log_info "Note: Different cluster IDs returned ($CLUSTER_ID vs $SECOND_CLUSTER_ID), which is fine for demo purposes"
-        fi
-      else
-        log_warning "Idempotence may not be working correctly: Got different sandbox IDs ($SANDBOX_ID vs $SECOND_SANDBOX_ID)"
-      fi
-    else
-      log_error "Failed to extract sandbox ID from second response"
-    fi
-  fi
-  
-  # If retain option is enabled, demonstrate retaining the sandbox
-  if [ "$RETAIN_SANDBOX" = true ]; then
-    log_info "Demonstrating sandbox retention (extending expiration)..."
-    RETAIN_URL="http://localhost:$GLOBAL_PORT/selector.ClusterSelector/RetainSandbox"
-    
-    # Prepare retain payload with jq
-    RETAIN_PAYLOAD=$(jq -n \
-      --arg sid "$SANDBOX_ID" \
-      --arg cid "$CLUSTER_ID" \
-      '{sandboxId: $sid, clusterId: $cid}')
-    
-    # Retain the sandbox multiple times to demonstrate extension
-    for ((i=1; i<=$RETAIN_COUNT; i++)); do
-      log_info "Retain operation $i of $RETAIN_COUNT (waiting $RETAIN_INTERVAL seconds between operations)..."
-      
-      # Using xh to make the Connect RPC call to retain the sandbox
-      RETAIN_RESPONSE=$(xh POST $RETAIN_URL \
-        Content-Type:application/json \
-        --raw "$RETAIN_PAYLOAD" \
-        --pretty=none) || { log_error "Retain API request $i failed!"; continue; }
-      
-      # Pretty print the retain response
-      echo "$RETAIN_RESPONSE" | jq '.'
-      
-      # Check if the retain was successful using jq
-      if [[ $(echo "$RETAIN_RESPONSE" | jq '.success') == "true" ]]; then
-        EXPIRATION_TIME=$(echo "$RETAIN_RESPONSE" | jq -r '.expirationTime')
-        
-        # Format expiration time in a human-readable format, safe for all systems
-        EXPIRATION_READABLE="$(date -u -d @${EXPIRATION_TIME} "+%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || date -u -r ${EXPIRATION_TIME} "+%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || echo "timestamp: ${EXPIRATION_TIME}")"
-        
-        log_success "Sandbox $SANDBOX_ID successfully retained! New expiration: $EXPIRATION_READABLE"
-      else
-        ERROR_MESSAGE=$(echo "$RETAIN_RESPONSE" | jq -r '.error // "Unknown error"')
-        log_error "Failed to retain sandbox: $ERROR_MESSAGE"
-        break
-      fi
-      
-      # Wait between retain operations if not the last one
-      if [ $i -lt $RETAIN_COUNT ]; then
-        sleep $RETAIN_INTERVAL
-      fi
-    done
-  fi
-  
-  # If release option is enabled, release the sandbox
-  if [ "$RELEASE_SANDBOX" = true ]; then
-    log_info "Waiting 3 seconds before releasing the sandbox..."
-    sleep 3
-    
-    log_info "Releasing the sandbox..."
-    RELEASE_URL="http://localhost:$GLOBAL_PORT/selector.ClusterSelector/ReleaseSandbox"
-    
-    # Prepare release payload with jq
-    RELEASE_PAYLOAD=$(jq -n \
-      --arg sid "$SANDBOX_ID" \
-      --arg cid "$CLUSTER_ID" \
-      '{sandboxId: $sid, clusterId: $cid}')
-    
-    # Using xh to make the Connect RPC call to release the sandbox
-    RELEASE_RESPONSE=$(xh POST $RELEASE_URL \
-      Content-Type:application/json \
-      --raw "$RELEASE_PAYLOAD" \
-      --pretty=none) || { log_error "Release API request failed!"; exit 1; }
-    
-    # Pretty print the release response
-    echo "$RELEASE_RESPONSE" | jq '.'
-    
-    # Check if the release was successful using jq
-    if [[ $(echo "$RELEASE_RESPONSE" | jq '.success') == "true" ]]; then
-      log_success "Sandbox $SANDBOX_ID successfully released!"
-    else
-      ERROR_MESSAGE=$(echo "$RELEASE_RESPONSE" | jq -r '.error // "Unknown error"')
-      log_error "Failed to release sandbox: $ERROR_MESSAGE"
-    fi
-  fi
-else
-  log_error "Failed to extract sandbox ID from response"
-fi
+# Run the demo client
+log_info "Running the demo client..."
+DEMO_ARGS=$(build_demo_args)
+./bin/demo $DEMO_ARGS
 
 log_info "Press ENTER to stop the services and exit..."
 read
