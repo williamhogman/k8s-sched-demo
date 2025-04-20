@@ -30,6 +30,9 @@ type K8sClient struct {
 	namespace string
 	// Configuration options
 	useGvisor bool // Whether to enforce gVisor runtime
+	// Context for controlling the watcher lifecycle
+	watchCtx    context.Context
+	watchCancel context.CancelFunc
 }
 
 // NewK8sClient creates a new K8s client
@@ -46,11 +49,18 @@ func NewK8sClient(cfg *config.Config) (*K8sClient, error) {
 		return nil, fmt.Errorf("failed to create clientset: %v", err)
 	}
 
-	return &K8sClient{
-		clientset: clientset,
-		namespace: cfg.Kubernetes.Namespace,
-		useGvisor: cfg.Kubernetes.UseGvisor,
-	}, nil
+	// Create a context with cancel function for the watchers
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := &K8sClient{
+		clientset:   clientset,
+		namespace:   cfg.Kubernetes.Namespace,
+		useGvisor:   cfg.Kubernetes.UseGvisor,
+		watchCtx:    ctx,
+		watchCancel: cancel,
+	}
+
+	return client, nil
 }
 
 // NewTestK8sClient creates a new K8s client for testing with explicit config
@@ -60,10 +70,15 @@ func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
 		return nil, fmt.Errorf("failed to create clientset: %v", err)
 	}
 
+	// Create a context with cancel function for the watchers
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &K8sClient{
-		clientset: clientset,
-		namespace: "sandbox",
-		useGvisor: false, // Default to false for testing
+		clientset:   clientset,
+		namespace:   "sandbox",
+		useGvisor:   false, // Default to false for testing
+		watchCtx:    ctx,
+		watchCancel: cancel,
 	}, nil
 }
 
@@ -234,9 +249,6 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 		return "", fmt.Errorf("failed to create pod: %v", err)
 	}
 
-	// Watch pod until it's scheduled (in background)
-	go k.watchPodStatus(namespace, createdPod.Name)
-
 	return createdPod.Name, nil
 }
 
@@ -266,21 +278,47 @@ func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error 
 	return nil
 }
 
-// watchPodStatus watches the pod status and logs events (simplified monitoring)
-func (k *K8sClient) watchPodStatus(namespace, podName string) {
-	for {
-		pod, err := k.clientset.CoreV1().Pods(namespace).Get(context.Background(), podName, metav1.GetOptions{})
-		if err != nil {
-			log.Printf("Error getting pod status: %v", err)
-			return
-		}
+// StartWatchers initiates watching for pod events in the namespace
+func (k *K8sClient) StartWatchers() {
+	log.Printf("Starting pod watcher for namespace: %s", k.namespace)
+	go k.watchNamespacePods()
+}
 
-		log.Printf("Pod %s status: %s", podName, pod.Status.Phase)
+// StopWatchers cancels all running watchers
+func (k *K8sClient) StopWatchers() {
+	log.Printf("Stopping pod watchers")
+	k.watchCancel()
+}
 
-		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
-			return
-		}
+// watchNamespacePods watches for all pod events in the namespace
+func (k *K8sClient) watchNamespacePods() {
+	log.Printf("Watching pods in namespace %s", k.namespace)
 
-		time.Sleep(5 * time.Second)
+	// Create a watcher for all pods in the namespace
+	watcher, err := k.clientset.CoreV1().Pods(k.namespace).Watch(k.watchCtx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("Error creating pod watcher: %v", err)
+		return
 	}
+	defer watcher.Stop()
+
+	// Process pod events
+	for event := range watcher.ResultChan() {
+		select {
+		case <-k.watchCtx.Done():
+			log.Printf("Pod watcher context cancelled, exiting")
+			return
+		default:
+			if pod, ok := event.Object.(*corev1.Pod); ok {
+				// Log the pod event
+				log.Printf("Pod event: type=%s, name=%s, phase=%s",
+					event.Type, pod.Name, pod.Status.Phase)
+
+				// Here we could handle different types of events and pod phases
+				// For now we're just logging them
+			}
+		}
+	}
+
+	log.Printf("Pod watcher for namespace %s exited", k.namespace)
 }

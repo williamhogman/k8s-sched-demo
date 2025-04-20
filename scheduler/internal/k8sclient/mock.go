@@ -22,11 +22,14 @@ func NewMockK8sClient() *MockK8sClient {
 	}
 }
 
-// SetNamespace changes the default namespace
-func (m *MockK8sClient) SetNamespace(namespace string) {
-	if namespace != "" {
-		m.namespace = namespace
-	}
+// StartWatchers is a no-op in the mock implementation
+func (m *MockK8sClient) StartWatchers() {
+	log.Printf("[MOCK] Would start watchers for namespace %s", m.namespace)
+}
+
+// StopWatchers is a no-op in the mock implementation
+func (m *MockK8sClient) StopWatchers() {
+	log.Printf("[MOCK] Would stop watchers")
 }
 
 // ScheduleSandbox simulates scheduling a sandbox on Kubernetes

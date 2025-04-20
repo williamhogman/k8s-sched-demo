@@ -16,6 +16,8 @@ type K8sClientInterface interface {
 	// We don't define the template-based methods here to avoid import cycles
 	// Template-based pod creation should be used directly with the k8sclient package
 	ReleaseSandbox(ctx context.Context, sandboxID string) error
+	StartWatchers()
+	StopWatchers()
 }
 
 // SchedulerService implements the scheduling service logic
