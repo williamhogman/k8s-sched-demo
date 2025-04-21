@@ -1,4 +1,4 @@
-package main
+package http
 
 import (
 	"context"
@@ -62,7 +62,7 @@ func ProvideServer(p ServerParams) {
 	})
 }
 
-// ServerModule provides the server components to the fx container
-var ServerModule = fx.Options(
+// Module provides the server components to the fx container
+var Module = fx.Options(
 	fx.Invoke(ProvideServer),
 )

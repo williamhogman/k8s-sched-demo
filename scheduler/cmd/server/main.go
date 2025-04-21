@@ -6,10 +6,12 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/jobs"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/logging"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/transport"
 )
 
 func main() {
@@ -27,8 +29,8 @@ func main() {
 		k8sclient.Module,
 		persistence.Module,
 		service.Module,
-		ServerModule,
-		CleanupModule,
+		transport.Module,
+		jobs.Module,
 	)
 
 	app.Run()

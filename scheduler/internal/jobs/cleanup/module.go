@@ -1,4 +1,4 @@
-package main
+package cleanup
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
 )
 
-// CleanupParams contains the dependencies for the cleanup manager
-type CleanupParams struct {
+// ManagerParams contains the dependencies for the cleanup manager
+type ManagerParams struct {
 	fx.In
 
 	Lifecycle        fx.Lifecycle
@@ -20,8 +20,8 @@ type CleanupParams struct {
 	Logger           *zap.Logger
 }
 
-// ProvideCleanupManager creates and registers the cleanup manager with fx lifecycle
-func ProvideCleanupManager(p CleanupParams) {
+// ProvideManager creates and registers the cleanup manager with fx lifecycle
+func ProvideManager(p ManagerParams) {
 	logger := p.Logger.Named("cleanup-manager")
 
 	p.Lifecycle.Append(fx.Hook{
@@ -30,7 +30,7 @@ func ProvideCleanupManager(p CleanupParams) {
 				zap.Int("intervalSeconds", p.Config.Sandbox.CleanupIntervalSecs),
 				zap.Int("batchSize", p.Config.Sandbox.CleanupBatchSize))
 
-			cleanupManager := NewCleanupManager(
+			cleanupManager := NewManager(
 				p.SchedulerService,
 				p.Config.Sandbox.CleanupIntervalSecs,
 				p.Config.Sandbox.CleanupBatchSize,
@@ -48,7 +48,7 @@ func ProvideCleanupManager(p CleanupParams) {
 	})
 }
 
-// CleanupModule provides the cleanup components to the fx container
-var CleanupModule = fx.Options(
-	fx.Invoke(ProvideCleanupManager),
+// Module provides the cleanup components to the fx container
+var Module = fx.Options(
+	fx.Invoke(ProvideManager),
 )

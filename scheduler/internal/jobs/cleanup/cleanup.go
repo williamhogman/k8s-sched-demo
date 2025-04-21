@@ -1,4 +1,4 @@
-package main
+package cleanup
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// CleanupManager handles the periodic cleanup of expired sandboxes
-type CleanupManager struct {
+// Manager handles the periodic cleanup of expired sandboxes
+type Manager struct {
 	service      *service.SchedulerService
 	intervalSecs int
 	batchSize    int
@@ -18,10 +18,10 @@ type CleanupManager struct {
 	logger       *zap.Logger
 }
 
-// NewCleanupManager creates a new cleanup manager
-func NewCleanupManager(service *service.SchedulerService, intervalSecs, batchSize int, logger *zap.Logger) *CleanupManager {
+// NewManager creates a new cleanup manager
+func NewManager(service *service.SchedulerService, intervalSecs, batchSize int, logger *zap.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &CleanupManager{
+	return &Manager{
 		service:      service,
 		intervalSecs: intervalSecs,
 		batchSize:    batchSize,
@@ -32,7 +32,7 @@ func NewCleanupManager(service *service.SchedulerService, intervalSecs, batchSiz
 }
 
 // Start begins the cleanup job in a goroutine
-func (cm *CleanupManager) Start() {
+func (cm *Manager) Start() {
 	cm.logger.Info("Starting cleanup job",
 		zap.Int("intervalSeconds", cm.intervalSecs),
 		zap.Int("batchSize", cm.batchSize))
@@ -40,13 +40,13 @@ func (cm *CleanupManager) Start() {
 }
 
 // Stop cancels the cleanup job
-func (cm *CleanupManager) Stop() {
+func (cm *Manager) Stop() {
 	cm.logger.Info("Stopping cleanup job")
 	cm.cancel()
 }
 
 // runCleanupJob periodically runs the cleanup job to remove expired sandboxes
-func (cm *CleanupManager) runCleanupJob() {
+func (cm *Manager) runCleanupJob() {
 	ticker := time.NewTicker(time.Duration(cm.intervalSecs) * time.Second)
 	defer ticker.Stop()
 
