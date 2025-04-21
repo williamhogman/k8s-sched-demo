@@ -110,77 +110,37 @@ func (s *SchedulerService) startEventProcessing() {
 
 // handlePodEvent processes pod events from the k8s client
 func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
-	s.logger.Info("Handling pod event",
-		zap.String("pod", event.PodName),
+	sandboxID := event.PodName
+
+	// Define bad events that should trigger sandbox release
+	isBadEvent := event.EventType == types.PodEventFailed ||
+		event.EventType == types.PodEventUnschedulable ||
+		event.EventType == types.PodEventTerminated
+
+	if !isBadEvent {
+		return
+	}
+
+	// Check if we've already handled this event
+	shouldHandle, _ := s.shouldHandlePodEvent(s.eventCtx, sandboxID)
+	if !shouldHandle {
+		s.logger.Info("Already processed event for this sandbox",
+			zap.String("sandboxID", sandboxID))
+		return
+	}
+
+	// Log action about to be taken
+	s.logger.Info("Bad event detected - releasing sandbox",
+		zap.String("sandboxID", sandboxID),
 		zap.String("eventType", string(event.EventType)),
 		zap.String("reason", event.Reason))
 
-	// Extract the sandbox ID from the pod name
-	sandboxID := event.PodName
-
-	// Determine if this is a failure event that should trigger a sandbox release
-	shouldReleaseOnFailure := false
-	if event.EventType == types.PodEventTerminated {
-		shouldReleaseOnFailure = true
-	}
-
-	// Record the failure to avoid duplicate notifications and releases
-	// We only track by sandboxID, not specific event type, to avoid multiple releases
-	shouldHandleEvent, err := s.shouldHandlePodEvent(s.eventCtx, sandboxID)
+	// Release the sandbox
+	_, err := s.ReleaseSandbox(s.eventCtx, sandboxID)
 	if err != nil {
-		s.logger.Error("Failed to check event handling status",
+		// Log error but continue to broadcasting
+		s.logger.Error("Failed to release sandbox",
 			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
-		// Continue anyway, might result in duplicate notifications
-		shouldHandleEvent = true // If we can't check, assume we should handle it
-	}
-
-	if !shouldHandleEvent {
-		s.logger.Info("Skipping already processed pod event",
-			zap.String("sandboxID", sandboxID),
-			zap.String("eventType", string(event.EventType)))
-		return
-	}
-
-	// If this is a failure event, automatically release the sandbox
-	if shouldReleaseOnFailure {
-		s.logger.Info("Automatically releasing failed sandbox",
-			zap.String("sandboxID", sandboxID),
-			zap.String("reason", event.Reason))
-
-		// Release the sandbox
-		_, err := s.ReleaseSandbox(s.eventCtx, sandboxID)
-		if err != nil {
-			s.logger.Error("Failed to auto-release failed sandbox",
-				zap.String("sandboxID", sandboxID),
-				zap.Error(err))
-			// Continue with notification anyway
-		}
-	}
-
-	// We only care about events that indicate a sandbox is no longer usable
-	// For other events, just return without broadcasting
-	if !shouldReleaseOnFailure {
-		return
-	}
-
-	// Log useful information about the event
-	s.logger.Info("Broadcasting termination event with relevant info",
-		zap.String("pod_name", event.PodName),
-		zap.String("event_type", string(event.EventType)),
-		zap.String("message", event.Message),
-		zap.String("reason", event.Reason))
-
-	// Send the termination event to the broadcaster
-	broadcastEvent := events.Event{
-		SandboxID: sandboxID,
-		Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
-	}
-
-	if err := s.eventBroadcaster.BroadcastEvent(s.eventCtx, broadcastEvent); err != nil {
-		s.logger.Warn("Failed to broadcast pod termination event",
-			zap.String("sandboxID", sandboxID),
-			zap.String("eventType", string(event.EventType)),
 			zap.Error(err))
 	}
 }
