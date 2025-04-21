@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/events"
 	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 	"go.uber.org/zap"
@@ -37,6 +37,8 @@ type SchedulerService struct {
 	eventCancel context.CancelFunc
 	// Flag to indicate if event processing is running
 	eventProcessingRunning bool
+	// Event broadcaster
+	eventBroadcaster events.BroadcasterInterface
 }
 
 // SchedulerServiceConfig contains configuration for the scheduler service
@@ -51,6 +53,7 @@ func NewSchedulerService(
 	store persistence.Store,
 	config SchedulerServiceConfig,
 	logger *zap.Logger,
+	eventBroadcaster events.BroadcasterInterface,
 ) *SchedulerService {
 	ctx, cancel := context.WithCancel(context.Background())
 	svc := &SchedulerService{
@@ -61,6 +64,7 @@ func NewSchedulerService(
 		logger:            logger.Named("scheduler-service"),
 		eventCtx:          ctx,
 		eventCancel:       cancel,
+		eventBroadcaster:  eventBroadcaster,
 	}
 
 	// Start processing pod events
@@ -116,9 +120,7 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 
 	// Determine if this is a failure event that should trigger a sandbox release
 	shouldReleaseOnFailure := false
-	if event.EventType == types.PodEventFailed ||
-		event.EventType == types.PodEventUnschedulable ||
-		event.EventType == types.PodEventTerminated {
+	if event.EventType == types.PodEventTerminated {
 		shouldReleaseOnFailure = true
 	}
 
@@ -156,13 +158,31 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 		}
 	}
 
-	// Send notification to upstream systems about the pod event
-	// This could be implemented through a callback, webhook, message queue, etc.
-	s.logger.Info("Would notify upstream system about pod event",
-		zap.String("sandboxID", sandboxID),
-		zap.String("eventType", string(event.EventType)),
-		zap.String("reason", event.Reason),
-		zap.String("message", event.Message))
+	// We only care about events that indicate a sandbox is no longer usable
+	// For other events, just return without broadcasting
+	if !shouldReleaseOnFailure {
+		return
+	}
+
+	// Log useful information about the event
+	s.logger.Info("Broadcasting termination event with relevant info",
+		zap.String("pod_name", event.PodName),
+		zap.String("event_type", string(event.EventType)),
+		zap.String("message", event.Message),
+		zap.String("reason", event.Reason))
+
+	// Send the termination event to the broadcaster
+	broadcastEvent := events.Event{
+		SandboxID: sandboxID,
+		Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
+	}
+
+	if err := s.eventBroadcaster.BroadcastEvent(s.eventCtx, broadcastEvent); err != nil {
+		s.logger.Warn("Failed to broadcast pod termination event",
+			zap.String("sandboxID", sandboxID),
+			zap.String("eventType", string(event.EventType)),
+			zap.Error(err))
+	}
 }
 
 // shouldHandlePodEvent checks if we should handle this pod event or if it's already been processed
@@ -298,43 +318,11 @@ func generatePodName() string {
 	return fmt.Sprintf("%s-%s", prefix, shortUuid)
 }
 
-// isValidSandboxID checks if a sandbox ID has the correct format
-func isValidSandboxID(id string) bool {
-	// Check for basic pattern: sandbox-XXXXXXXX where X is a hex digit
-	if len(id) != 16 || !strings.HasPrefix(id, "sandbox-") {
-		return false
-	}
-
-	// Extract the ID part (after "sandbox-")
-	idPart := id[8:]
-	if len(idPart) != 8 {
-		return false
-	}
-
-	// Check if ID part is valid hex
-	_, err := strconv.ParseUint(idPart, 16, 32)
-	return err == nil
-}
-
-// ensureValidSandboxID converts an ID to a valid sandbox ID format
-// If the ID is already valid, it returns it unchanged.
-// If it's not valid, it generates a new valid sandbox ID.
-func ensureValidSandboxID(id string) string {
-	if isValidSandboxID(id) {
-		return id
-	}
-
-	return generatePodName()
-}
-
 // ReleaseSandbox handles deleting a sandbox
 func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string) (bool, error) {
 	if sandboxID == "" {
 		return false, fmt.Errorf("sandbox ID cannot be empty")
 	}
-
-	// Ensure the sandbox ID has the correct format
-	sandboxID = ensureValidSandboxID(sandboxID)
 
 	s.logger.Info("Releasing sandbox", zap.String("sandboxID", sandboxID))
 
@@ -363,6 +351,19 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 		// This is not critical, just a warning
 	}
 
+	// Broadcast the terminated event
+	broadcastEvent := events.Event{
+		SandboxID: sandboxID,
+		Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
+	}
+
+	if err := s.eventBroadcaster.BroadcastEvent(ctx, broadcastEvent); err != nil {
+		s.logger.Warn("Failed to broadcast sandbox termination event",
+			zap.String("sandboxID", sandboxID),
+			zap.Error(err))
+		// Don't fail the request just because we couldn't broadcast the event
+	}
+
 	s.logger.Info("Successfully released sandbox", zap.String("sandboxID", sandboxID))
 	return true, nil
 }
@@ -372,9 +373,6 @@ func (s *SchedulerService) RetainSandbox(ctx context.Context, sandboxID string) 
 	if sandboxID == "" {
 		return time.Time{}, false, fmt.Errorf("sandbox ID cannot be empty")
 	}
-
-	// Ensure the sandbox ID has the correct format
-	sandboxID = ensureValidSandboxID(sandboxID)
 
 	s.logger.Info("Retaining sandbox", zap.String("sandboxID", sandboxID))
 
@@ -462,6 +460,20 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 			s.logger.Error("Failed to release expired sandbox",
 				zap.String("sandboxID", sandboxID),
 				zap.Error(err))
+
+			// Even if the release failed, still try to broadcast the terminated event
+			// as the upstream systems should know this sandbox is no longer usable
+			terminatedEvent := events.Event{
+				SandboxID: sandboxID,
+				Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
+			}
+
+			if broadcastErr := s.eventBroadcaster.BroadcastEvent(ctx, terminatedEvent); broadcastErr != nil {
+				s.logger.Warn("Failed to broadcast sandbox termination event",
+					zap.String("sandboxID", sandboxID),
+					zap.Error(broadcastErr))
+			}
+
 			// Continue to next sandbox
 			continue
 		}
@@ -484,8 +496,25 @@ func (s *SchedulerService) Close() error {
 	// Cancel the event processing context
 	s.eventCancel()
 
+	var errors []error
+
+	// Close the store
 	if s.store != nil {
-		return s.store.Close()
+		if err := s.store.Close(); err != nil {
+			errors = append(errors, err)
+		}
 	}
+
+	// Close the event broadcaster
+	if s.eventBroadcaster != nil {
+		if err := s.eventBroadcaster.Close(); err != nil {
+			errors = append(errors, err)
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors while closing: %v", errors)
+	}
+
 	return nil
 }

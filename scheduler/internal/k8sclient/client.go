@@ -268,26 +268,19 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 
 // ReleaseSandbox deletes a sandbox pod
 func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
-	// Check if the sandbox ID starts with "sandbox-" prefix, if not, prepend it
-	podName := sandboxID
-	if len(podName) > 8 && podName[:8] != "sandbox-" {
-		podName = fmt.Sprintf("sandbox-%s", sandboxID)
-	}
-
-	// Always use the client's namespace
 	namespace := k.namespace
 
 	k.logger.Info("Deleting pod",
-		zap.String("pod", podName),
+		zap.String("pod", sandboxID),
 		zap.String("namespace", namespace))
 
 	// Delete options (can be adjusted as needed)
 	deleteOptions := metav1.DeleteOptions{}
 
 	// Delete the pod
-	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, podName, deleteOptions)
+	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, sandboxID, deleteOptions)
 	if err != nil {
-		return fmt.Errorf("failed to delete pod %s: %v", podName, err)
+		return fmt.Errorf("failed to delete pod %s: %v", sandboxID, err)
 	}
 
 	return nil

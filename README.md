@@ -1,103 +1,115 @@
-# Kubernetes Scheduler Demo
+# Kubernetes Scheduler Demo System
 
-This project demonstrates a two-tier scheduling system for Kubernetes workloads:
+A demonstration of a Kubernetes sandbox scheduling system with idempotence, expiration management, and event broadcasting.
 
-1. **Global Scheduler Service** (formerly "Cluster Selector"): Decides which Kubernetes cluster should run a workload based on priority and weighted random selection.
-2. **Scheduler Service**: Schedules the workload on the selected Kubernetes cluster using the K8s API.
+## Overview
 
-> **Note:** The "Cluster Selector" service has been renamed to "Global Scheduler" to better reflect its role as the higher-level scheduler in the system. The code repository still contains references to "cluster-selector" that will be refactored in future updates.
+This demo showcases a multi-component system for scheduling and managing ephemeral Kubernetes sandbox environments:
+
+1. **Scheduler Service** - Creates and manages sandboxes in Kubernetes clusters with TTL expiration
+2. **Global Scheduler** - Frontend service that selects clusters and routes requests 
+3. **Events Service** - Receives and processes sandbox termination events
+4. **Demo Client** - Interacts with the system to demonstrate features
 
 ## Architecture
 
-- **Global Scheduler** maintains a list of available clusters with priority and weight information.
-- When a scheduling request is made, it selects the highest priority cluster(s).
-- If multiple clusters have the same priority, it uses weighted random selection based on the weight of each cluster.
-- After selecting a cluster, it connects to the **Scheduler Service** on that cluster via gRPC.
-- The **Scheduler Service** takes the request and schedules a Kubernetes pod for the sandbox.
+The system demonstrates several important architectural patterns:
 
-## Simplified API
+- **Idempotence** - Safely handle duplicate requests using Redis
+- **Event Broadcasting** - Pub/sub pattern for sandbox termination events
+- **TTL Management** - Auto-expiration and cleanup of resources
+- **Global Scheduling** - Cluster selection based on priority and weight
 
-The system includes a simplified API through the Global Scheduler's `GetSandbox` endpoint:
+## Components
 
-- **Single Call Operation**: Clients use a single call to the Global Scheduler for both cluster selection and sandbox scheduling.
-- **End-to-End Process**: The Global Scheduler handles both cluster selection and sandbox scheduling internally.
-- **Streamlined Client Experience**: Clients only need to specify configuration (like image and command) to receive a fully scheduled sandbox.
-- **Internal Resource Management**: CPU and memory resources are managed internally by the scheduler with default settings, keeping resource allocation decisions encapsulated within the system.
+### Scheduler Service
 
-This simplification reduces client complexity and provides a more cohesive scheduling experience.
+- Creates sandbox pods in Kubernetes
+- Manages idempotence with Redis or in-memory store
+- Handles sandbox retention and release
+- Tracks expirations and auto-cleans expired sandboxes
+- Broadcasts termination events when sandboxes become unusable
 
-## Project Structure
+### Global Scheduler
 
-```
-.
-├── cluster-selector/           # Global Scheduler service (directory to be renamed)
-│   ├── cmd/server/             # gRPC server implementation
-│   ├── internal/               # Internal packages
-│   │   ├── client/             # Client for connecting to scheduler
-│   │   ├── service/            # Implementation of selection logic
-│   │   └── storage/            # Storage for cluster information
-│   └── proto/                  # Protocol buffer definitions
-├── scheduler/                  # Kubernetes scheduler service
-│   ├── cmd/server/             # gRPC server implementation 
-│   ├── internal/               # Internal packages
-│   │   ├── k8sclient/          # Kubernetes client wrapper
-│   │   └── service/            # Implementation of scheduling logic
-│   └── proto/                  # Protocol buffer definitions
-└── cmd/client/                 # Example client implementation
-```
+- Provides a cluster selection algorithm
+- Routes sandbox requests to appropriate scheduler instances
+- Handles client requests with a simple API
 
-## Building and Running
+### Events Service 
 
-### Prerequisites
+- Receives sandbox termination events
+- Processes and logs termination events
+- Demonstrates event-driven architecture
+- Can be extended to trigger workflows when sandboxes are terminated
 
-- Go 1.21 or later
-- Protocol Buffers compiler (`protoc`)
-- A Kubernetes cluster (for running the scheduler service)
+### Demo Client
 
-### Building the Project
+- Makes API calls to demonstrate system features
+- Shows idempotent sandbox creation
+- Demonstrates sandbox retention and release
+
+## Running the Demo
+
+The demo can be run with various options:
 
 ```bash
-make build
+./demo.sh [options]
 ```
 
-### Running the Services
+### Basic Options
 
-1. Start the Scheduler service (using the mock client for testing):
+- `--no-build` - Skip building binaries
+- `--verbose` - Enable verbose logging
+- `--release` - Demonstrate releasing the sandbox
+- `--retain` - Demonstrate sandbox retention
+- `--enable-events` - Enable event broadcasting
 
-```bash
-./bin/scheduler --mock=true --port=50052
-```
+### Advanced Options
 
-2. Start the Global Scheduler service:
+- `--scheduler-port=PORT` - Set scheduler port (default: 50052)
+- `--global-port=PORT` - Set global scheduler port (default: 50051)
+- `--events-port=PORT` - Set events service port (default: 50053)
+- `--sandbox-ttl=DURATION` - Set sandbox TTL (default: 15m)
+- `--idempotence-ttl=DURATION` - Set idempotence key TTL (default: 24h)
+- `--no-redis` - Use in-memory store instead of Redis
 
-```bash
-./bin/global-scheduler
-```
+### Example Usage
 
-3. Run the client to get a sandbox with the simplified API:
-
-```bash
-./bin/client --image="nginx:latest" --command="nginx -g 'daemon off;'"
-```
-
-Or run the demo script to see everything in action:
-
+Basic demo:
 ```bash
 ./demo.sh
 ```
 
+Demo with events system:
+```bash
+./demo.sh --enable-events --verbose
+```
+
+Full demo with all features:
+```bash
+./demo.sh --enable-events --verbose --retain --release
+```
+
+## Event System
+
+The event system uses a simplified approach where only one type of event is broadcast:
+
+- **TERMINATED** - Notification that a sandbox is no longer usable
+
+A sandbox can become terminated for several reasons:
+- Explicit release by a client
+- TTL expiration
+- Failure during creation or operation
+
+The termination event includes details about what happened, allowing systems to take appropriate action when a sandbox is no longer available.
+
+These events can be monitored in real-time when running with `--enable-events`.
+
 ## Implementation Details
 
-### Cluster Selection Algorithm
-
-1. Filter clusters by the highest available priority
-2. If multiple clusters have the same priority, use weighted random selection:
-   - Each cluster's weight determines how many "slots" it gets in the selection pool
-   - Randomly select a slot, which corresponds to a cluster
-
-### Kubernetes Scheduling
-
-The scheduler service creates a Kubernetes pod with:
-- Labels identifying the sandbox
-- Default resource allocations (CPU and memory)
-- Configuration (image, command) passed in the request 
+- Written in Go with Connect RPC
+- Uses Redis for persistent idempotence with configurable TTL
+- Kubernetes client with mock mode for testing
+- Uber FX for dependency injection
+- Zap for structured logging 

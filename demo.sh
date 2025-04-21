@@ -18,6 +18,7 @@ NC='\033[0m' # No Color
 BUILD=true
 SCHEDULER_PORT=50052
 GLOBAL_PORT=50051
+EVENTS_PORT=50053
 HEALTH_CHECK_TIMEOUT=10
 RELEASE_SANDBOX=false
 RETAIN_SANDBOX=false
@@ -35,6 +36,7 @@ RAW_OUTPUT=false
 CLIENT_ONLY=false
 NAMESPACE="sandbox"
 DEV_LOGGING=true
+ENABLE_EVENTS=true
 
 # Array to keep track of background processes
 declare -a PIDS=()
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --global-port)
       GLOBAL_PORT="$2"
+      shift 2
+      ;;
+    --events-port)
+      EVENTS_PORT="$2"
       shift 2
       ;;
     --timeout)
@@ -123,6 +129,10 @@ while [[ $# -gt 0 ]]; do
       DEV_LOGGING=true
       shift
       ;;
+    --enable-events)
+      ENABLE_EVENTS=true
+      shift
+      ;;
     --help)
       echo "K8s Scheduler Demo"
       echo
@@ -132,6 +142,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-build        Skip the build step"
       echo "  --scheduler-port  Set custom scheduler port (default: 50052)"
       echo "  --global-port     Set custom global scheduler port (default: 50051)"
+      echo "  --events-port     Set custom events service port (default: 50053)"
       echo "  --timeout         Set service health check timeout in seconds (default: 10)"
       echo "  --release         Also demonstrate releasing the sandbox"
       echo "  --retain          Demonstrate retaining the sandbox to extend its expiration"
@@ -149,6 +160,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --raw             Output raw JSON responses"
       echo "  --client-only     Run only the demo client without starting services"
       echo "  --dev-logging     Enable development logging mode"
+      echo "  --enable-events   Enable event broadcasting and start the events service"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -256,6 +268,11 @@ if [ "$BUILD" = true ]; then
   else
     # Build everything for the full demo
     make build || { log_error "Build failed!"; exit 1; }
+    
+    # Build the test-events service if events are enabled
+    if [ "$ENABLE_EVENTS" = true ]; then
+      go build -o bin/test-events ./cmd/test-events || { log_error "Test events build failed!"; exit 1; }
+    fi
   fi
   
   log_success "Build completed successfully!"
@@ -291,6 +308,11 @@ if nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ "$ENABLE_EVENTS" = true ] && nc -z localhost $EVENTS_PORT >/dev/null 2>&1; then
+  log_error "Port $EVENTS_PORT is already in use!"
+  exit 1
+fi
+
 # Check Redis and start if needed
 if [ "$USE_REDIS" = true ]; then
   log_info "Checking Redis server..."
@@ -318,6 +340,16 @@ if [ "$USE_REDIS" = true ]; then
   fi
 fi
 
+# Start the event service if enabled
+if [ "$ENABLE_EVENTS" = true ]; then
+  log_info "Starting the Events service on port $EVENTS_PORT..."
+  ./bin/test-events --port=$EVENTS_PORT &
+  PIDS+=($!)
+
+  # Check if the events service is ready
+  check_service_port $EVENTS_PORT "Events service" $HEALTH_CHECK_TIMEOUT || exit 1
+fi
+
 # Start the Scheduler service
 log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 
@@ -335,6 +367,12 @@ if [ "$USE_REDIS" = true ]; then
 else
   SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=memory"
   log_info "Scheduler will run with in-memory idempotence store and sandbox TTL=$SANDBOX_TTL"
+fi
+
+# Add event broadcasting configuration if enabled
+if [ "$ENABLE_EVENTS" = true ]; then
+  SCHEDULER_CMD="$SCHEDULER_CMD --event-broadcast=true --event-endpoint=localhost:$EVENTS_PORT"
+  log_info "Event broadcasting enabled to endpoint localhost:$EVENTS_PORT"
 fi
 
 # Log the namespace being used

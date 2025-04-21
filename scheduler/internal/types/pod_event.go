@@ -14,6 +14,8 @@ const (
 	PodEventTerminated PodEventType = "Terminated"
 	// PodEventUnschedulable indicates that the pod cannot be scheduled
 	PodEventUnschedulable PodEventType = "Unschedulable"
+	// PodEventScheduled indicates that the pod has been scheduled
+	PodEventScheduled PodEventType = "Scheduled"
 )
 
 // PodEvent represents a Kubernetes pod event that needs to be propagated

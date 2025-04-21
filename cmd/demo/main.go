@@ -43,6 +43,7 @@ var (
 	successColor = color.New(color.FgGreen).SprintFunc()
 	errorColor   = color.New(color.FgRed).SprintFunc()
 	warningColor = color.New(color.FgYellow).SprintFunc()
+	noteColor    = color.New(color.FgCyan).SprintFunc()
 )
 
 // Initialize the selector client
@@ -70,6 +71,10 @@ func logError(format string, args ...interface{}) {
 
 func logWarning(format string, args ...interface{}) {
 	log.Printf("%s %s", warningColor("[WARNING]"), fmt.Sprintf(format, args...))
+}
+
+func logNote(format string, args ...interface{}) {
+	log.Printf("%s %s", noteColor("[NOTE]"), fmt.Sprintf(format, args...))
 }
 
 // Helper to convert time to human-readable format
@@ -184,6 +189,17 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// Print demo header and info
+	logInfo("Starting K8s Scheduler Demo Client")
+	logNote("This demo showcases sandbox creation, idempotence, retention, and lifecycle management")
+
+	// Check if the event service might be running
+	_, err := http.Get("http://localhost:50053")
+	if err == nil {
+		logNote("Event broadcasting appears to be enabled - sandbox lifecycle events will be broadcast")
+		logNote("Events include: SCHEDULED, RETAINED, RELEASED, EXPIRED, and FAILED")
+	}
+
 	// Initialize the selector client
 	logInfo("Initializing client for global scheduler at port %d", *globalPort)
 	client := NewSelectorClient(*globalPort)
@@ -279,4 +295,10 @@ func main() {
 	}
 
 	logSuccess("Demo completed successfully!")
+
+	// Print event system reference at the end
+	_, err = http.Get("http://localhost:50053")
+	if err == nil {
+		logNote("For more information on the event broadcasting system, see EVENT-SYSTEM.md")
+	}
 }

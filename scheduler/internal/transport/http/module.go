@@ -35,10 +35,11 @@ func ProvideServer(p ServerParams) {
 			go func() {
 				// Set up the HTTP routes with Connect handlers
 				mux := http.NewServeMux()
-				path, handler := schedulerv1connect.NewSandboxSchedulerHandler(server)
-				mux.Handle(path, handler)
 
-				// Start the server
+				// Register the scheduler service handler
+				schedulerPath, schedulerHandler := schedulerv1connect.NewSandboxSchedulerHandler(server)
+				mux.Handle(schedulerPath, schedulerHandler)
+
 				addr := fmt.Sprintf(":%d", p.Config.Server.Port)
 				logger.Info("Starting Scheduler server with Connect API",
 					zap.String("address", addr),

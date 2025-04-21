@@ -25,6 +25,9 @@ type Config struct {
 
 	// Logging settings
 	Logging LoggingConfig
+
+	// Event Broadcaster settings
+	EventBroadcaster EventBroadcasterConfig
 }
 
 // ServerConfig contains server-specific configuration
@@ -59,6 +62,15 @@ type LoggingConfig struct {
 	Development bool // Whether to use development logger (more verbose)
 }
 
+// EventBroadcasterConfig contains configuration for the event broadcaster
+type EventBroadcasterConfig struct {
+	Enabled    bool          // Whether to enable event broadcasting
+	Endpoint   string        // Endpoint to send events to (host:port)
+	MaxRetries int           // Maximum number of retries for sending events
+	RetryDelay time.Duration // Delay between retries
+	BufferSize int           // Size of the event buffer channel
+}
+
 // LoadConfig loads configuration from environment variables and command line flags
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
@@ -83,6 +95,13 @@ func LoadConfig() (*Config, error) {
 		Logging: LoggingConfig{
 			Development: false, // Default to production logging
 		},
+		EventBroadcaster: EventBroadcasterConfig{
+			Enabled:    true,              // Disabled by default
+			Endpoint:   "localhost:50053", // Default endpoint
+			MaxRetries: 3,
+			RetryDelay: 500 * time.Millisecond,
+			BufferSize: 100,
+		},
 	}
 
 	// Parse command-line flags
@@ -102,6 +121,12 @@ func LoadConfig() (*Config, error) {
 	flag.DurationVar(&cfg.Idempotence.TTL, "idempotence-ttl", cfg.Idempotence.TTL, "TTL for idempotence keys")
 
 	flag.BoolVar(&cfg.Logging.Development, "dev-logging", cfg.Logging.Development, "Use development logging mode (more verbose)")
+
+	flag.BoolVar(&cfg.EventBroadcaster.Enabled, "event-broadcast", cfg.EventBroadcaster.Enabled, "Enable event broadcasting")
+	flag.StringVar(&cfg.EventBroadcaster.Endpoint, "event-endpoint", cfg.EventBroadcaster.Endpoint, "Endpoint for broadcasting events")
+	flag.IntVar(&cfg.EventBroadcaster.MaxRetries, "event-max-retries", cfg.EventBroadcaster.MaxRetries, "Maximum retries for sending events")
+	flag.DurationVar(&cfg.EventBroadcaster.RetryDelay, "event-retry-delay", cfg.EventBroadcaster.RetryDelay, "Delay between retries for sending events")
+	flag.IntVar(&cfg.EventBroadcaster.BufferSize, "event-buffer-size", cfg.EventBroadcaster.BufferSize, "Size of the event buffer channel")
 
 	// Override with environment variables if present
 	if env := os.Getenv("SCHEDULER_PORT"); env != "" {
@@ -151,6 +176,35 @@ func LoadConfig() (*Config, error) {
 
 	if env := os.Getenv("SCHEDULER_DEV_LOGGING"); env != "" {
 		cfg.Logging.Development = env == "true" || env == "1"
+	}
+
+	if env := os.Getenv("SCHEDULER_EVENT_BROADCAST"); env != "" {
+		cfg.EventBroadcaster.Enabled = env == "true" || env == "1"
+	}
+
+	if env := os.Getenv("SCHEDULER_EVENT_ENDPOINT"); env != "" {
+		cfg.EventBroadcaster.Endpoint = env
+	}
+
+	if env := os.Getenv("SCHEDULER_EVENT_MAX_RETRIES"); env != "" {
+		var maxRetries int
+		if _, err := fmt.Sscanf(env, "%d", &maxRetries); err == nil {
+			cfg.EventBroadcaster.MaxRetries = maxRetries
+		}
+	}
+
+	if env := os.Getenv("SCHEDULER_EVENT_RETRY_DELAY"); env != "" {
+		var retryDelay time.Duration
+		if _, err := fmt.Sscanf(env, "%s", &retryDelay); err == nil {
+			cfg.EventBroadcaster.RetryDelay = retryDelay
+		}
+	}
+
+	if env := os.Getenv("SCHEDULER_EVENT_BUFFER_SIZE"); env != "" {
+		var bufferSize int
+		if _, err := fmt.Sscanf(env, "%d", &bufferSize); err == nil {
+			cfg.EventBroadcaster.BufferSize = bufferSize
+		}
 	}
 
 	// Parse flags after setting environment variables to allow flags to override env vars

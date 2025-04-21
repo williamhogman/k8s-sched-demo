@@ -2,6 +2,7 @@ package service
 
 import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/events"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -13,6 +14,7 @@ func ProvideSchedulerService(
 	k8sClient K8sClientInterface,
 	idempotenceStore persistence.Store,
 	logger *zap.Logger,
+	eventBroadcaster events.BroadcasterInterface,
 ) *SchedulerService {
 	return NewSchedulerService(
 		k8sClient,
@@ -22,6 +24,7 @@ func ProvideSchedulerService(
 			SandboxTTL:        cfg.Sandbox.TTL,
 		},
 		logger,
+		eventBroadcaster,
 	)
 }
 
