@@ -7,21 +7,22 @@ import (
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/logging"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
 )
 
 func main() {
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
-
 	app := fx.New(
-		// Configure logging
-		fx.WithLogger(func() fxevent.Logger {
+		// Register logging module first
+		logging.Module,
+
+		// Configure fx logging
+		fx.WithLogger(func(logger *zap.Logger) fxevent.Logger {
 			return &fxevent.ZapLogger{Logger: logger}
 		}),
 
-		// Register modules
+		// Register other modules
 		config.Module,
 		k8sclient.Module,
 		persistence.Module,

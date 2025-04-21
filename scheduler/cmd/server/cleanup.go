@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"go.uber.org/zap"
 )
 
 // CleanupManager handles the periodic cleanup of expired sandboxes
@@ -15,10 +15,11 @@ type CleanupManager struct {
 	batchSize    int
 	ctx          context.Context
 	cancel       context.CancelFunc
+	logger       *zap.Logger
 }
 
 // NewCleanupManager creates a new cleanup manager
-func NewCleanupManager(service *service.SchedulerService, intervalSecs, batchSize int) *CleanupManager {
+func NewCleanupManager(service *service.SchedulerService, intervalSecs, batchSize int, logger *zap.Logger) *CleanupManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &CleanupManager{
 		service:      service,
@@ -26,18 +27,21 @@ func NewCleanupManager(service *service.SchedulerService, intervalSecs, batchSiz
 		batchSize:    batchSize,
 		ctx:          ctx,
 		cancel:       cancel,
+		logger:       logger.Named("cleanup-job"),
 	}
 }
 
 // Start begins the cleanup job in a goroutine
 func (cm *CleanupManager) Start() {
-	log.Printf("Starting sandbox cleanup job with interval=%ds, batch size=%d", cm.intervalSecs, cm.batchSize)
+	cm.logger.Info("Starting cleanup job",
+		zap.Int("intervalSeconds", cm.intervalSecs),
+		zap.Int("batchSize", cm.batchSize))
 	go cm.runCleanupJob()
 }
 
 // Stop cancels the cleanup job
 func (cm *CleanupManager) Stop() {
-	log.Println("Stopping cleanup job")
+	cm.logger.Info("Stopping cleanup job")
 	cm.cancel()
 }
 
@@ -49,15 +53,15 @@ func (cm *CleanupManager) runCleanupJob() {
 	for {
 		select {
 		case <-cm.ctx.Done():
-			log.Println("Cleanup job shutting down")
+			cm.logger.Info("Cleanup job shutting down")
 			return
 		case <-ticker.C:
 			// Run the cleanup job
 			count, err := cm.service.CleanupExpiredSandboxes(cm.ctx, cm.batchSize)
 			if err != nil {
-				log.Printf("Error during sandbox cleanup: %v", err)
+				cm.logger.Error("Error during sandbox cleanup", zap.Error(err))
 			} else if count > 0 {
-				log.Printf("Cleanup job released %d expired sandboxes", count)
+				cm.logger.Info("Cleanup completed", zap.Int("releasedCount", count))
 			}
 		}
 	}

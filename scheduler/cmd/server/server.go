@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 
 	"connectrpc.com/connect"
+	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -19,12 +19,14 @@ import (
 // SchedulerServer implements the ConnectRPC SandboxScheduler service
 type SchedulerServer struct {
 	schedulerService *service.SchedulerService
+	logger           *zap.Logger
 }
 
 // NewSchedulerServer creates a new instance of SchedulerServer
-func NewSchedulerServer(schedulerService *service.SchedulerService) *SchedulerServer {
+func NewSchedulerServer(schedulerService *service.SchedulerService, logger *zap.Logger) *SchedulerServer {
 	return &SchedulerServer{
 		schedulerService: schedulerService,
+		logger:           logger.Named("scheduler-server"),
 	}
 }
 
@@ -33,7 +35,7 @@ func (s *SchedulerServer) ScheduleSandbox(
 	ctx context.Context,
 	req *connect.Request[schedulerv1.ScheduleRequest],
 ) (*connect.Response[schedulerv1.ScheduleResponse], error) {
-	log.Println("Request headers:", req.Header())
+	s.logger.Debug("Request received", zap.Any("headers", req.Header()))
 
 	// Call the scheduler service
 	podName, success, err := s.schedulerService.ScheduleSandbox(
@@ -48,7 +50,9 @@ func (s *SchedulerServer) ScheduleSandbox(
 	}
 
 	if err != nil {
-		log.Printf("Failed to schedule sandbox with key %s: %v", req.Msg.IdempotenceKey, err)
+		s.logger.Error("Failed to schedule sandbox",
+			zap.String("idempotenceKey", req.Msg.IdempotenceKey),
+			zap.Error(err))
 		resp.Error = err.Error()
 	} else {
 		resp.SandboxId = podName
@@ -63,7 +67,7 @@ func (s *SchedulerServer) ReleaseSandbox(
 	ctx context.Context,
 	req *connect.Request[schedulerv1.ReleaseSandboxRequest],
 ) (*connect.Response[schedulerv1.ReleaseSandboxResponse], error) {
-	log.Println("Request headers:", req.Header())
+	s.logger.Debug("Request received", zap.Any("headers", req.Header()))
 
 	// Call the scheduler service
 	success, err := s.schedulerService.ReleaseSandbox(
@@ -77,7 +81,9 @@ func (s *SchedulerServer) ReleaseSandbox(
 	}
 
 	if err != nil {
-		log.Printf("Failed to release sandbox %s: %v", req.Msg.SandboxId, err)
+		s.logger.Error("Failed to release sandbox",
+			zap.String("sandboxId", req.Msg.SandboxId),
+			zap.Error(err))
 		resp.Error = err.Error()
 	}
 
@@ -90,7 +96,7 @@ func (s *SchedulerServer) RetainSandbox(
 	ctx context.Context,
 	req *connect.Request[schedulerv1.RetainSandboxRequest],
 ) (*connect.Response[schedulerv1.RetainSandboxResponse], error) {
-	log.Println("Request headers:", req.Header())
+	s.logger.Debug("Request received", zap.Any("headers", req.Header()))
 
 	// Call the scheduler service
 	expirationTime, success, err := s.schedulerService.RetainSandbox(
@@ -104,7 +110,9 @@ func (s *SchedulerServer) RetainSandbox(
 	}
 
 	if err != nil {
-		log.Printf("Failed to retain sandbox %s: %v", req.Msg.SandboxId, err)
+		s.logger.Error("Failed to retain sandbox",
+			zap.String("sandboxId", req.Msg.SandboxId),
+			zap.Error(err))
 		resp.Error = err.Error()
 	} else {
 		resp.ExpirationTime = expirationTime.Unix()
@@ -115,7 +123,7 @@ func (s *SchedulerServer) RetainSandbox(
 }
 
 // StartServer starts the HTTP server with Connect API handlers
-func StartServer(cfg *config.Config, server *SchedulerServer) error {
+func StartServer(cfg *config.Config, server *SchedulerServer, logger *zap.Logger) error {
 	// Set up the HTTP routes with Connect handlers
 	mux := http.NewServeMux()
 	path, handler := schedulerv1connect.NewSandboxSchedulerHandler(server)
@@ -123,7 +131,10 @@ func StartServer(cfg *config.Config, server *SchedulerServer) error {
 
 	// Start the server
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("Starting Scheduler server with Connect API on %s", addr)
+	logger.Info("Starting Scheduler server with Connect API",
+		zap.String("address", addr),
+		zap.Int("port", cfg.Server.Port))
+
 	return http.ListenAndServe(
 		addr,
 		// Use h2c so we can serve HTTP/2 without TLS

@@ -22,6 +22,9 @@ type Config struct {
 
 	// Idempotence store settings
 	Idempotence IdempotenceConfig
+
+	// Logging settings
+	Logging LoggingConfig
 }
 
 // ServerConfig contains server-specific configuration
@@ -51,6 +54,11 @@ type IdempotenceConfig struct {
 	TTL      time.Duration
 }
 
+// LoggingConfig contains logging configuration
+type LoggingConfig struct {
+	Development bool // Whether to use development logger (more verbose)
+}
+
 // LoadConfig loads configuration from environment variables and command line flags
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
@@ -72,6 +80,9 @@ func LoadConfig() (*Config, error) {
 			RedisURI: "redis://localhost:6379/0",
 			TTL:      1 * time.Hour,
 		},
+		Logging: LoggingConfig{
+			Development: false, // Default to production logging
+		},
 	}
 
 	// Parse command-line flags
@@ -89,6 +100,8 @@ func LoadConfig() (*Config, error) {
 	flag.StringVar(&cfg.Idempotence.Type, "idempotence", cfg.Idempotence.Type, "Idempotence store type: 'memory' or 'redis'")
 	flag.StringVar(&cfg.Idempotence.RedisURI, "redis-uri", cfg.Idempotence.RedisURI, "Redis connection URI for idempotence store")
 	flag.DurationVar(&cfg.Idempotence.TTL, "idempotence-ttl", cfg.Idempotence.TTL, "TTL for idempotence keys")
+
+	flag.BoolVar(&cfg.Logging.Development, "dev-logging", cfg.Logging.Development, "Use development logging mode (more verbose)")
 
 	// Override with environment variables if present
 	if env := os.Getenv("SCHEDULER_PORT"); env != "" {
@@ -134,6 +147,10 @@ func LoadConfig() (*Config, error) {
 
 	if env := os.Getenv("SCHEDULER_REDIS_URI"); env != "" {
 		cfg.Idempotence.RedisURI = env
+	}
+
+	if env := os.Getenv("SCHEDULER_DEV_LOGGING"); env != "" {
+		cfg.Logging.Development = env == "true" || env == "1"
 	}
 
 	// Parse flags after setting environment variables to allow flags to override env vars

@@ -34,6 +34,7 @@ VERBOSE=false
 RAW_OUTPUT=false
 CLIENT_ONLY=false
 NAMESPACE="sandbox"
+DEV_LOGGING=true
 
 # Array to keep track of background processes
 declare -a PIDS=()
@@ -118,6 +119,10 @@ while [[ $# -gt 0 ]]; do
       CLIENT_ONLY=true
       shift
       ;;
+    --dev-logging)
+      DEV_LOGGING=true
+      shift
+      ;;
     --help)
       echo "K8s Scheduler Demo"
       echo
@@ -143,6 +148,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --verbose         Enable verbose logging"
       echo "  --raw             Output raw JSON responses"
       echo "  --client-only     Run only the demo client without starting services"
+      echo "  --dev-logging     Enable development logging mode"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -317,6 +323,11 @@ log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 
 # Construct scheduler command with Redis params if enabled
 SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE"
+if [ "$DEV_LOGGING" = true ]; then
+  SCHEDULER_CMD="$SCHEDULER_CMD --dev-logging"
+  log_info "Development logging enabled"
+fi
+
 if [ "$USE_REDIS" = true ]; then
   REDIS_URI="redis://:$REDIS_PASSWORD@$REDIS_ADDR/$REDIS_DB"
   SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=redis --redis-uri=$REDIS_URI --idempotence-ttl=$IDEMPOTENCE_TTL"

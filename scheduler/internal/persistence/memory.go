@@ -169,3 +169,26 @@ func (m *memoryStore) RemoveSandboxExpiration(ctx context.Context, sandboxID str
 func (m *memoryStore) Close() error {
 	return nil
 }
+
+// setIfNotExists stores a value for a key only if the key doesn't exist
+func (m *memoryStore) setIfNotExists(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if key exists in the store
+	if _, exists := m.store[key]; exists {
+		return false, nil
+	}
+
+	// Set the key if it doesn't exist
+	m.store[key] = value
+	return true, nil
+}
+
+// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
+func (m *memoryStore) MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error) {
+	trackingKey := "pod-event:" + sandboxID
+
+	// Use the existing setIfNotExists method to implement this
+	return m.setIfNotExists(ctx, trackingKey, time.Now().Format(time.RFC3339), ttl)
+}

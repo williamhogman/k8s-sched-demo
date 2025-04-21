@@ -3,12 +3,13 @@ package k8sclient
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,10 +34,14 @@ type K8sClient struct {
 	// Context for controlling the watcher lifecycle
 	watchCtx    context.Context
 	watchCancel context.CancelFunc
+	// Logger
+	logger *zap.Logger
+	// Event channel for pod events
+	eventChan chan types.PodEvent
 }
 
 // NewK8sClient creates a new K8s client
-func NewK8sClient(cfg *config.Config) (*K8sClient, error) {
+func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 	// Get kubeconfig from default location
 	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(os.Getenv("HOME"), ".kube", "config"))
 	if err != nil {
@@ -58,13 +63,15 @@ func NewK8sClient(cfg *config.Config) (*K8sClient, error) {
 		useGvisor:   cfg.Kubernetes.UseGvisor,
 		watchCtx:    ctx,
 		watchCancel: cancel,
+		logger:      logger.Named("k8sclient"),
+		eventChan:   make(chan types.PodEvent, 100), // Buffer to avoid blocking
 	}
 
 	return client, nil
 }
 
 // NewTestK8sClient creates a new K8s client for testing with explicit config
-func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
+func NewTestK8sClient(config *rest.Config, logger *zap.Logger) (*K8sClient, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clientset: %v", err)
@@ -79,7 +86,14 @@ func NewTestK8sClient(config *rest.Config) (*K8sClient, error) {
 		useGvisor:   false, // Default to false for testing
 		watchCtx:    ctx,
 		watchCancel: cancel,
+		logger:      logger.Named("k8sclient"),
+		eventChan:   make(chan types.PodEvent, 100), // Buffer to avoid blocking
 	}, nil
+}
+
+// GetEventChannel returns the channel for pod events
+func (k *K8sClient) GetEventChannel() <-chan types.PodEvent {
+	return k.eventChan
 }
 
 // ScheduleSandbox creates a pod for the sandbox
@@ -263,8 +277,9 @@ func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error 
 	// Always use the client's namespace
 	namespace := k.namespace
 
-	// Log deletion
-	log.Printf("Deleting pod %s in namespace %s", podName, namespace)
+	k.logger.Info("Deleting pod",
+		zap.String("pod", podName),
+		zap.String("namespace", namespace))
 
 	// Delete options (can be adjusted as needed)
 	deleteOptions := metav1.DeleteOptions{}
@@ -280,24 +295,26 @@ func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error 
 
 // StartWatchers initiates watching for pod events in the namespace
 func (k *K8sClient) StartWatchers() {
-	log.Printf("Starting pod watcher for namespace: %s", k.namespace)
+	k.logger.Info("Starting pod watcher", zap.String("namespace", k.namespace))
 	go k.watchNamespacePods()
 }
 
 // StopWatchers cancels all running watchers
 func (k *K8sClient) StopWatchers() {
-	log.Printf("Stopping pod watchers")
+	k.logger.Info("Stopping pod watchers")
 	k.watchCancel()
+	// Close the event channel
+	close(k.eventChan)
 }
 
 // watchNamespacePods watches for all pod events in the namespace
 func (k *K8sClient) watchNamespacePods() {
-	log.Printf("Watching pods in namespace %s", k.namespace)
+	k.logger.Info("Watching pods", zap.String("namespace", k.namespace))
 
 	// Create a watcher for all pods in the namespace
 	watcher, err := k.clientset.CoreV1().Pods(k.namespace).Watch(k.watchCtx, metav1.ListOptions{})
 	if err != nil {
-		log.Printf("Error creating pod watcher: %v", err)
+		k.logger.Error("Error creating pod watcher", zap.Error(err))
 		return
 	}
 	defer watcher.Stop()
@@ -306,19 +323,136 @@ func (k *K8sClient) watchNamespacePods() {
 	for event := range watcher.ResultChan() {
 		select {
 		case <-k.watchCtx.Done():
-			log.Printf("Pod watcher context cancelled, exiting")
+			k.logger.Info("Pod watcher context cancelled, exiting")
 			return
 		default:
 			if pod, ok := event.Object.(*corev1.Pod); ok {
-				// Log the pod event
-				log.Printf("Pod event: type=%s, name=%s, phase=%s",
-					event.Type, pod.Name, pod.Status.Phase)
-
-				// Here we could handle different types of events and pod phases
-				// For now we're just logging them
+				// Check if this pod is managed by our scheduler
+				if pod.Labels["managed-by"] == "scheduler" {
+					// Process the pod event to determine if we need to send a notification
+					k.processPodEvent(pod)
+				}
 			}
 		}
 	}
 
-	log.Printf("Pod watcher for namespace %s exited", k.namespace)
+	k.logger.Info("Pod watcher exited", zap.String("namespace", k.namespace))
+}
+
+// processPodEvent checks if a pod event is significant and sends it to the event channel if needed
+func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
+	var eventType types.PodEventType
+	var reason, message string
+	shouldSendEvent := false
+
+	// Check the pod phase
+	switch pod.Status.Phase {
+	case corev1.PodFailed:
+		eventType = types.PodEventFailed
+		reason = "PodFailed"
+		message = "Pod entered Failed phase"
+		shouldSendEvent = true
+	case corev1.PodSucceeded:
+		eventType = types.PodEventSucceeded
+		reason = "PodSucceeded"
+		message = "Pod completed successfully"
+		shouldSendEvent = true
+	}
+
+	// Check for unschedulable condition
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+			if condition.Reason == "Unschedulable" {
+				eventType = types.PodEventUnschedulable
+				reason = condition.Reason
+				message = condition.Message
+				shouldSendEvent = true
+				break
+			}
+		}
+
+		// Check for other problematic conditions
+		if condition.Status == corev1.ConditionFalse {
+			switch condition.Type {
+			case corev1.PodReady, corev1.ContainersReady:
+				if condition.Reason != "" {
+					eventType = types.PodEventFailed
+					reason = fmt.Sprintf("Condition%s:%s", string(condition.Type), condition.Reason)
+					message = condition.Message
+					shouldSendEvent = true
+				}
+			}
+		}
+	}
+
+	// If containers are in a terminal state, check for reasons
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		// Check for waiting containers with issues
+		if containerStatus.State.Waiting != nil {
+			waitState := containerStatus.State.Waiting
+
+			// Consider certain waiting reasons as failure events
+			switch waitState.Reason {
+			case "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerError":
+				eventType = types.PodEventFailed
+				reason = fmt.Sprintf("ContainerWaiting:%s", waitState.Reason)
+				message = fmt.Sprintf("Container %s is waiting: %s",
+					containerStatus.Name, waitState.Message)
+				shouldSendEvent = true
+			}
+		}
+
+		// Check terminated containers
+		if containerStatus.State.Terminated != nil {
+			termState := containerStatus.State.Terminated
+
+			// Non-zero exit code indicates a problem
+			if termState.ExitCode != 0 {
+				eventType = types.PodEventFailed
+				reason = fmt.Sprintf("ContainerExited:%d", termState.ExitCode)
+				message = fmt.Sprintf("Container %s exited with code %d: %s",
+					containerStatus.Name, termState.ExitCode, termState.Message)
+				shouldSendEvent = true
+			} else if termState.Reason != "Completed" {
+				// Any reason other than normal completion
+				eventType = types.PodEventTerminated
+				reason = fmt.Sprintf("ContainerTerminated:%s", termState.Reason)
+				message = fmt.Sprintf("Container %s terminated: %s",
+					containerStatus.Name, termState.Message)
+				shouldSendEvent = true
+			}
+		}
+
+		// Check for restart count increases
+		if containerStatus.RestartCount > 0 {
+			k.logger.Debug("Container has restart history",
+				zap.String("pod", pod.Name),
+				zap.String("container", containerStatus.Name),
+				zap.Int32("restartCount", containerStatus.RestartCount))
+		}
+	}
+
+	// Send the event if needed
+	if shouldSendEvent {
+		event := types.PodEvent{
+			PodName:   pod.Name,
+			EventType: eventType,
+			Reason:    reason,
+			Message:   message,
+			Timestamp: time.Now(),
+		}
+
+		select {
+		case k.eventChan <- event:
+			k.logger.Info("Sent pod event to channel",
+				zap.String("pod", pod.Name),
+				zap.String("eventType", string(eventType)),
+				zap.String("reason", reason))
+		default:
+			// If channel is full, log a warning but don't block
+			k.logger.Warn("Event channel full, dropping pod event",
+				zap.String("pod", pod.Name),
+				zap.String("eventType", string(eventType)))
+		}
+	}
 }

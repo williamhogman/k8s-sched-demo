@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 
 	"go.uber.org/fx"
+	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -22,11 +22,13 @@ type ServerParams struct {
 	Lifecycle        fx.Lifecycle
 	Config           *config.Config
 	SchedulerService *service.SchedulerService
+	Logger           *zap.Logger
 }
 
 // ProvideServer creates and registers the HTTP server with fx lifecycle
 func ProvideServer(p ServerParams) {
-	server := NewSchedulerServer(p.SchedulerService)
+	logger := p.Logger.Named("server")
+	server := NewSchedulerServer(p.SchedulerService, logger)
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
@@ -38,20 +40,23 @@ func ProvideServer(p ServerParams) {
 
 				// Start the server
 				addr := fmt.Sprintf(":%d", p.Config.Server.Port)
-				log.Printf("Starting Scheduler server with Connect API on %s", addr)
+				logger.Info("Starting Scheduler server with Connect API",
+					zap.String("address", addr),
+					zap.Int("port", p.Config.Server.Port))
+
 				if err := http.ListenAndServe(
 					addr,
 					// Use h2c so we can serve HTTP/2 without TLS
 					h2c.NewHandler(mux, &http2.Server{}),
 				); err != nil {
-					log.Fatalf("Failed to serve: %v", err)
+					logger.Fatal("Failed to start server", zap.Error(err))
 				}
 			}()
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
 			// We could implement server graceful shutdown here if needed
-			log.Println("Stopping server...")
+			logger.Info("Stopping server")
 			return nil
 		},
 	})

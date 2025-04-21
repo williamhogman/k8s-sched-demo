@@ -51,6 +51,12 @@ type Store interface {
 	// Used when a sandbox is explicitly released
 	RemoveSandboxExpiration(ctx context.Context, sandboxID string) error
 
+	// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
+	// Returns true if this is the first time this event is being processed within the TTL window,
+	// false if we've already processed an event for this sandbox recently.
+	// This helps prevent duplicate processing during event storms.
+	MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error)
+
 	// Close cleans up resources used by the store
 	Close() error
 }

@@ -76,6 +76,11 @@ func (r *redisStore) formExpirationKey() string {
 	return r.keyPrefix + "expirations"
 }
 
+// formEventKey creates a Redis key for tracking pod events
+func (r *redisStore) formEventKey(key string) string {
+	return r.keyPrefix + "event:" + key
+}
+
 // GetSandboxID retrieves the sandbox ID for a given idempotence key
 func (r *redisStore) GetSandboxID(ctx context.Context, idempotenceKey string) (string, error) {
 	key := r.formKey(idempotenceKey)
@@ -269,4 +274,27 @@ func (r *redisStore) Close() error {
 // RedisClient returns the underlying Redis client (for testing and diagnostics)
 func (r *redisStore) RedisClient() *redis.Client {
 	return r.client
+}
+
+// setIfNotExists stores a value for a key only if the key doesn't exist
+func (r *redisStore) setIfNotExists(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	// Use consistent key formatting
+	redisKey := r.formEventKey(key)
+
+	// SetNX returns true if the key was set (didn't exist before)
+	set, err := r.client.SetNX(ctx, redisKey, value, ttl).Result()
+	if err != nil {
+		return false, fmt.Errorf("failed to set key %s if not exists: %w", key, err)
+	}
+
+	return set, nil
+}
+
+// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
+func (r *redisStore) MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error) {
+	// Create a tracking key for this pod event
+	trackingKey := "pod-event:" + sandboxID
+
+	// Use the existing setIfNotExists method to implement this
+	return r.setIfNotExists(ctx, trackingKey, time.Now().Format(time.RFC3339), ttl)
 }
