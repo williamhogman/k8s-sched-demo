@@ -401,35 +401,6 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 				shouldSendEvent = true
 			}
 		}
-
-		// Check terminated containers
-		if containerStatus.State.Terminated != nil {
-			termState := containerStatus.State.Terminated
-
-			// Non-zero exit code indicates a problem
-			if termState.ExitCode != 0 {
-				eventType = types.PodEventFailed
-				reason = fmt.Sprintf("ContainerExited:%d", termState.ExitCode)
-				message = fmt.Sprintf("Container %s exited with code %d: %s",
-					containerStatus.Name, termState.ExitCode, termState.Message)
-				shouldSendEvent = true
-			} else if termState.Reason != "Completed" {
-				// Any reason other than normal completion
-				eventType = types.PodEventTerminated
-				reason = fmt.Sprintf("ContainerTerminated:%s", termState.Reason)
-				message = fmt.Sprintf("Container %s terminated: %s",
-					containerStatus.Name, termState.Message)
-				shouldSendEvent = true
-			}
-		}
-
-		// Check for restart count increases
-		if containerStatus.RestartCount > 0 {
-			k.logger.Debug("Container has restart history",
-				zap.String("pod", pod.Name),
-				zap.String("container", containerStatus.Name),
-				zap.Int32("restartCount", containerStatus.RestartCount))
-		}
 	}
 
 	// Send the event if needed
