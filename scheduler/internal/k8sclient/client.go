@@ -30,7 +30,8 @@ type K8sClient struct {
 	clientset *kubernetes.Clientset
 	namespace string
 	// Configuration options
-	useGvisor bool // Whether to enforce gVisor runtime
+	useGvisor    bool   // Whether to enforce gVisor runtime
+	sandboxImage string // The sandbox image to use
 	// Context for controlling the watcher lifecycle
 	watchCtx    context.Context
 	watchCancel context.CancelFunc
@@ -58,13 +59,14 @@ func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client := &K8sClient{
-		clientset:   clientset,
-		namespace:   cfg.Kubernetes.Namespace,
-		useGvisor:   cfg.Kubernetes.UseGvisor,
-		watchCtx:    ctx,
-		watchCancel: cancel,
-		logger:      logger.Named("k8sclient"),
-		eventChan:   make(chan types.PodEvent, 100), // Buffer to avoid blocking
+		clientset:    clientset,
+		namespace:    cfg.Kubernetes.Namespace,
+		useGvisor:    cfg.Kubernetes.UseGvisor,
+		sandboxImage: cfg.Kubernetes.SandboxImage,
+		watchCtx:     ctx,
+		watchCancel:  cancel,
+		logger:       logger.Named("k8sclient"),
+		eventChan:    make(chan types.PodEvent, 100), // Buffer to avoid blocking
 	}
 
 	return client, nil
@@ -81,13 +83,14 @@ func NewTestK8sClient(config *rest.Config, logger *zap.Logger) (*K8sClient, erro
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &K8sClient{
-		clientset:   clientset,
-		namespace:   "sandbox",
-		useGvisor:   false, // Default to false for testing
-		watchCtx:    ctx,
-		watchCancel: cancel,
-		logger:      logger.Named("k8sclient"),
-		eventChan:   make(chan types.PodEvent, 100), // Buffer to avoid blocking
+		clientset:    clientset,
+		namespace:    "sandbox",
+		useGvisor:    false,            // Default to false for testing
+		sandboxImage: "sandbox:latest", // Default image for testing
+		watchCtx:     ctx,
+		watchCancel:  cancel,
+		logger:       logger.Named("k8sclient"),
+		eventChan:    make(chan types.PodEvent, 100), // Buffer to avoid blocking
 	}, nil
 }
 
@@ -165,8 +168,8 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	// Create the container specification
 	container := corev1.Container{
 		Name:            "sandbox-container",
-		Image:           "kennethreitz/httpbin",
-		Args:            []string{"gunicorn", "-b", "0.0.0.0:8000", "httpbin:app", "-k", "gevent"},
+		Image:           k.sandboxImage,
+		Args:            []string{},
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Resources:       resourceRequirements,
 		Env:             envVars,
@@ -177,7 +180,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/health",
-				Port: intstr.FromInt(80),
+				Port: intstr.FromInt(8000),
 			},
 		},
 		InitialDelaySeconds: 1,
@@ -189,7 +192,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	container.StartupProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/health",
+				Path: "/ready",
 				Port: intstr.FromInt(8000),
 			},
 		},
@@ -361,19 +364,6 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 				message = condition.Message
 				shouldSendEvent = true
 				break
-			}
-		}
-
-		// Check for other problematic conditions
-		if condition.Status == corev1.ConditionFalse {
-			switch condition.Type {
-			case corev1.PodReady, corev1.ContainersReady:
-				if condition.Reason != "" {
-					eventType = types.PodEventFailed
-					reason = fmt.Sprintf("Condition%s:%s", string(condition.Type), condition.Reason)
-					message = condition.Message
-					shouldSendEvent = true
-				}
 			}
 		}
 	}

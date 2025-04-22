@@ -37,6 +37,8 @@ CLIENT_ONLY=false
 NAMESPACE="sandbox"
 DEV_LOGGING=true
 ENABLE_EVENTS=true
+BUILD_SANDBOX=true
+SANDBOX_IMAGE="mock-sandbox:latest"
 
 # Array to keep track of background processes
 declare -a PIDS=()
@@ -133,6 +135,14 @@ while [[ $# -gt 0 ]]; do
       ENABLE_EVENTS=true
       shift
       ;;
+    --no-build-sandbox)
+      BUILD_SANDBOX=false
+      shift
+      ;;
+    --sandbox-image)
+      SANDBOX_IMAGE="$2"
+      shift 2
+      ;;
     --help)
       echo "K8s Scheduler Demo"
       echo
@@ -161,6 +171,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --client-only     Run only the demo client without starting services"
       echo "  --dev-logging     Enable development logging mode"
       echo "  --enable-events   Enable event broadcasting and start the events service"
+      echo "  --no-build-sandbox Skip building the sandbox Docker image"
+      echo "  --sandbox-image   Set the sandbox Docker image name (default: sandbox:latest)"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -280,6 +292,41 @@ else
   log_info "Skipping build step..."
 fi
 
+# Build and load the sandbox Docker image if needed
+if [ "$BUILD_SANDBOX" = true ] && [ "$CLIENT_ONLY" = false ]; then
+  log_info "Building sandbox Docker image..."
+  
+  # Check if Docker is running
+  if ! docker info > /dev/null 2>&1; then
+    log_error "Docker is not running. Please start Docker Desktop and try again."
+    exit 1
+  fi
+  
+  # Build the sandbox Docker image
+  cd mock-sandbox
+  docker build -t $SANDBOX_IMAGE . || { log_error "Sandbox Docker build failed!"; exit 1; }
+  cd ..
+  
+  # Check if we're using Docker Desktop Kubernetes
+  if kubectl config current-context | grep -q "docker-desktop"; then
+    log_info "Loading sandbox image into Docker Desktop Kubernetes cluster..."
+    
+    # Create the namespace if it doesn't exist
+    kubectl get namespace $NAMESPACE > /dev/null 2>&1 || kubectl create namespace $NAMESPACE
+    
+    # Load the image into the Kubernetes cluster
+    kind load docker-image $SANDBOX_IMAGE --name docker-desktop || \
+    { log_warning "Failed to load image with kind. Trying alternative method..."; \
+      # Alternative method for Docker Desktop
+      docker save $SANDBOX_IMAGE | (eval $(minikube docker-env) && docker load) || \
+      { log_warning "Failed to load image with minikube. The image may not be available in the cluster."; } }
+    
+    log_success "Sandbox image loaded into Kubernetes cluster."
+  else
+    log_warning "Not using Docker Desktop Kubernetes. Make sure the sandbox image is available in your cluster."
+  fi
+fi
+
 if [ "$CLIENT_ONLY" = true ]; then
   # When running in client-only mode, just verify services are running
   if ! nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
@@ -354,7 +401,7 @@ fi
 log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
 
 # Construct scheduler command with Redis params if enabled
-SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE"
+SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE --sandbox-image=$SANDBOX_IMAGE"
 if [ "$DEV_LOGGING" = true ]; then
   SCHEDULER_CMD="$SCHEDULER_CMD --dev-logging"
   log_info "Development logging enabled"
