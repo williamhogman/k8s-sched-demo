@@ -34,34 +34,19 @@ func (s *EventService) SendSandboxEvent(
 ) (*connect.Response[schedulerv1.SandboxEventResponse], error) {
 	event := req.Msg
 
-	// Log the event
-	log.Printf("📩 Received event: sandboxID=%s, type=%s",
-		event.SandboxId,
-		getEventTypeString(event.EventType))
-
 	// Send to channel for processing
 	select {
 	case s.eventChan <- event:
 		// Event sent to channel
 	default:
 		// Channel full or closed, just log
-		log.Printf("⚠️ Event channel full or closed, event not processed")
+		log.Printf("Event channel full or closed")
 	}
 
 	// Return success
 	return connect.NewResponse(&schedulerv1.SandboxEventResponse{
 		Success: true,
 	}), nil
-}
-
-// getEventTypeString returns a human-readable string for the event type
-func getEventTypeString(eventType schedulerv1.SandboxEventType) string {
-	switch eventType {
-	case schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED:
-		return "TERMINATED"
-	default:
-		return fmt.Sprintf("UNKNOWN(%d)", eventType)
-	}
 }
 
 func main() {
@@ -91,11 +76,8 @@ func main() {
 
 	// Start the server in a goroutine
 	go func() {
-		log.Printf("Starting event receiver on %s\n", addr)
-		log.Printf("Connect API path: %s\n", path)
-		log.Printf("This service will receive notifications when sandboxes are terminated")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
@@ -107,7 +89,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt)
 	<-sigChan
 
-	log.Println("Shutting down server...")
+	log.Println("Shutting down...")
 
 	// Create a shutdown context with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -115,36 +97,29 @@ func main() {
 
 	// Gracefully shutdown the server
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server shutdown failed: %v", err)
+		log.Fatalf("Shutdown failed: %v", err)
 	}
-
-	log.Println("Server gracefully stopped")
 }
 
 // processEvents handles events from the channel
 func processEvents(ctx context.Context, eventChan <-chan *schedulerv1.SandboxEvent) {
-	log.Println("Event processor started")
-	log.Println("Listening for sandbox termination events (when sandboxes are no longer usable)")
-
-	// In a real implementation, this would store events, forward them, etc.
 	for {
 		select {
 		case event, ok := <-eventChan:
 			if !ok {
 				// Channel closed
-				log.Println("Event channel closed, stopping processor")
 				return
 			}
 
 			if event.EventType == schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED {
 				// Process the termination event
-				log.Printf("🚨 SANDBOX TERMINATED: %s", event.SandboxId)
-				log.Printf("   Time: %s", time.Unix(event.Timestamp, 0).Format(time.RFC3339))
+				log.Printf("Sandbox terminated: %s at %s",
+					event.SandboxId,
+					time.Unix(event.Timestamp, 0).Format(time.RFC3339))
 			}
 
 		case <-ctx.Done():
 			// Context canceled
-			log.Println("Context canceled, stopping event processor")
 			return
 		}
 	}

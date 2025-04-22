@@ -1,3 +1,4 @@
+.SILENT:
 .PHONY: proto build demo run-global-scheduler run-scheduler clean
 
 proto:

@@ -35,8 +35,6 @@ func (s *SchedulerServer) ScheduleSandbox(
 	ctx context.Context,
 	req *connect.Request[schedulerv1.ScheduleRequest],
 ) (*connect.Response[schedulerv1.ScheduleResponse], error) {
-	s.logger.Debug("Request received", zap.Any("headers", req.Header()))
-
 	// Call the scheduler service
 	podName, success, err := s.schedulerService.ScheduleSandbox(
 		ctx,

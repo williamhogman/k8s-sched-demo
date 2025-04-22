@@ -4,6 +4,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/events"
@@ -22,7 +23,9 @@ func main() {
 
 		// Configure fx logging
 		fx.WithLogger(func(logger *zap.Logger) fxevent.Logger {
-			return &fxevent.ZapLogger{Logger: logger}
+			zl := &fxevent.ZapLogger{Logger: logger}
+			zl.UseLogLevel(zapcore.DebugLevel)
+			return zl
 		}),
 
 		// Register other modules

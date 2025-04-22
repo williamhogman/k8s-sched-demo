@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # ================================================================
 # K8s Scheduler Demo
@@ -30,7 +30,7 @@ REDIS_ADDR="localhost:$REDIS_PORT"
 REDIS_PASSWORD=""
 REDIS_DB=0
 IDEMPOTENCE_TTL="24h"
-SANDBOX_TTL="15m"
+SANDBOX_TTL="3m"
 VERBOSE=false
 RAW_OUTPUT=false
 CLIENT_ONLY=false
@@ -50,22 +50,6 @@ while [[ $# -gt 0 ]]; do
       BUILD=false
       shift
       ;;
-    --scheduler-port)
-      SCHEDULER_PORT="$2"
-      shift 2
-      ;;
-    --global-port)
-      GLOBAL_PORT="$2"
-      shift 2
-      ;;
-    --events-port)
-      EVENTS_PORT="$2"
-      shift 2
-      ;;
-    --timeout)
-      HEALTH_CHECK_TIMEOUT="$2"
-      shift 2
-      ;;
     --release)
       RELEASE_SANDBOX=true
       shift
@@ -74,46 +58,9 @@ while [[ $# -gt 0 ]]; do
       RETAIN_SANDBOX=true
       shift
       ;;
-    --retain-count)
-      RETAIN_COUNT="$2"
-      shift 2
-      ;;
-    --retain-interval)
-      RETAIN_INTERVAL="$2"
-      shift 2
-      ;;
     --no-redis)
       USE_REDIS=false
       shift
-      ;;
-    --redis-port)
-      REDIS_PORT="$2"
-      REDIS_ADDR="localhost:$REDIS_PORT"
-      shift 2
-      ;;
-    --redis-addr)
-      REDIS_ADDR="$2"
-      shift 2
-      ;;
-    --redis-password)
-      REDIS_PASSWORD="$2"
-      shift 2
-      ;;
-    --redis-db)
-      REDIS_DB="$2"
-      shift 2
-      ;;
-    --idempotence-ttl)
-      IDEMPOTENCE_TTL="$2"
-      shift 2
-      ;;
-    --sandbox-ttl)
-      SANDBOX_TTL="$2"
-      shift 2
-      ;;
-    --namespace)
-      NAMESPACE="$2"
-      shift 2
       ;;
     --verbose)
       VERBOSE=true
@@ -127,21 +74,9 @@ while [[ $# -gt 0 ]]; do
       CLIENT_ONLY=true
       shift
       ;;
-    --dev-logging)
-      DEV_LOGGING=true
-      shift
-      ;;
-    --enable-events)
-      ENABLE_EVENTS=true
-      shift
-      ;;
     --no-build-sandbox)
       BUILD_SANDBOX=false
       shift
-      ;;
-    --sandbox-image)
-      SANDBOX_IMAGE="$2"
-      shift 2
       ;;
     --help)
       echo "K8s Scheduler Demo"
@@ -150,29 +85,13 @@ while [[ $# -gt 0 ]]; do
       echo
       echo "Options:"
       echo "  --no-build        Skip the build step"
-      echo "  --scheduler-port  Set custom scheduler port (default: 50052)"
-      echo "  --global-port     Set custom global scheduler port (default: 50051)"
-      echo "  --events-port     Set custom events service port (default: 50053)"
-      echo "  --timeout         Set service health check timeout in seconds (default: 10)"
       echo "  --release         Also demonstrate releasing the sandbox"
       echo "  --retain          Demonstrate retaining the sandbox to extend its expiration"
-      echo "  --retain-count    Number of times to retain the sandbox (default: 3)"
-      echo "  --retain-interval Seconds between retain operations (default: 5)"
       echo "  --no-redis        Disable Redis for idempotence (default: enabled)"
-      echo "  --redis-port      Set Redis port (default: 6379)"
-      echo "  --redis-addr      Set Redis address (default: localhost:6379)"
-      echo "  --redis-password  Set Redis password (default: empty)"
-      echo "  --redis-db        Set Redis database number (default: 0)"
-      echo "  --idempotence-ttl Set TTL for idempotence keys (default: 24h)"
-      echo "  --sandbox-ttl     Set TTL for sandboxes (default: 15m)"
-      echo "  --namespace       Kubernetes namespace to use for sandboxes (default: sandbox)"
       echo "  --verbose         Enable verbose logging"
       echo "  --raw             Output raw JSON responses"
       echo "  --client-only     Run only the demo client without starting services"
-      echo "  --dev-logging     Enable development logging mode"
-      echo "  --enable-events   Enable event broadcasting and start the events service"
       echo "  --no-build-sandbox Skip building the sandbox Docker image"
-      echo "  --sandbox-image   Set the sandbox Docker image name (default: sandbox:latest)"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -195,11 +114,11 @@ check_dependency() {
 # Check for jq which we need for JSON parsing
 check_dependency jq
 
-# Log functions
-log_info() { echo -e "${BLUE}[$(date "+%Y-%m-%d %H:%M:%S") INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[$(date "+%Y-%m-%d %H:%M:%S") SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[$(date "+%Y-%m-%d %H:%M:%S") WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[$(date "+%Y-%m-%d %H:%M:%S") ERROR]${NC} $1"; }
+# Log functions - simplified to reduce verbosity
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Cleanup function to ensure all processes are terminated
 cleanup() {
@@ -214,8 +133,6 @@ cleanup() {
         wait $pid 2>/dev/null || true
       fi
     done
-    
-    log_success "All processes have been terminated."
   fi
 }
 
@@ -224,7 +141,7 @@ trap cleanup EXIT INT TERM
 
 # Build the demo command arguments
 build_demo_args() {
-  local demo_args="--global-port=$GLOBAL_PORT"
+  local demo_args=""
 
   if [ "$RETAIN_SANDBOX" = true ]; then
     demo_args="$demo_args --retain --retain-count=$RETAIN_COUNT --retain-interval=$RETAIN_INTERVAL"
@@ -245,7 +162,7 @@ build_demo_args() {
   echo "$demo_args"
 }
 
-# Function to check if a service is ready
+# Function to check if a service is ready - simplified logging
 check_service_port() {
   local port=$1
   local service_name=$2
@@ -253,7 +170,8 @@ check_service_port() {
   local attempt=1
   local last_pid=${PIDS[${#PIDS[@]}-1]}
   
-  log_info "Waiting for $service_name to be ready on port $port..."
+  # Only log after waiting for a while (5 attempts)
+  local initial_wait=5
   
   while ! nc -z localhost $port >/dev/null 2>&1; do
     if [ $attempt -ge $max_attempts ] || ! ps -p $last_pid > /dev/null; then
@@ -261,12 +179,21 @@ check_service_port() {
       return 1
     fi
     
-    log_info "Waiting for $service_name to start (attempt $attempt/$max_attempts)..."
+    # Only show waiting message after initial wait period
+    if [ $attempt -eq $initial_wait ]; then
+      log_info "Waiting for $service_name on port $port..."
+    fi
+    
+    # Only show progress every 5 attempts after initial wait
+    if [ $attempt -gt $initial_wait ] && [ $((attempt % 5)) -eq 0 ]; then
+      log_info "Still waiting for $service_name (attempt $attempt/$max_attempts)..."
+    fi
+    
     sleep 1
     ((attempt++))
   done
   
-  log_success "$service_name is ready on port $port!"
+  log_success "$service_name is ready!"
   return 0
 }
 
@@ -286,8 +213,6 @@ if [ "$BUILD" = true ]; then
       go build -o bin/test-events ./cmd/test-events || { log_error "Test events build failed!"; exit 1; }
     fi
   fi
-  
-  log_success "Build completed successfully!"
 else
   log_info "Skipping build step..."
 fi
@@ -304,24 +229,16 @@ if [ "$BUILD_SANDBOX" = true ] && [ "$CLIENT_ONLY" = false ]; then
   
   # Build the sandbox Docker image
   cd mock-sandbox
-  docker build -t $SANDBOX_IMAGE . || { log_error "Sandbox Docker build failed!"; exit 1; }
+  docker build -q -t $SANDBOX_IMAGE . || { log_error "Sandbox Docker build failed!"; exit 1; }
   cd ..
   
   # Check if we're using Docker Desktop Kubernetes
   if kubectl config current-context | grep -q "docker-desktop"; then
-    log_info "Loading sandbox image into Docker Desktop Kubernetes cluster..."
+    log_info "Loading sandbox image into Kubernetes cluster..."
     
     # Create the namespace if it doesn't exist
     kubectl get namespace $NAMESPACE > /dev/null 2>&1 || kubectl create namespace $NAMESPACE
     
-    # Load the image into the Kubernetes cluster
-    kind load docker-image $SANDBOX_IMAGE --name docker-desktop || \
-    { log_warning "Failed to load image with kind. Trying alternative method..."; \
-      # Alternative method for Docker Desktop
-      docker save $SANDBOX_IMAGE | (eval $(minikube docker-env) && docker load) || \
-      { log_warning "Failed to load image with minikube. The image may not be available in the cluster."; } }
-    
-    log_success "Sandbox image loaded into Kubernetes cluster."
   else
     log_warning "Not using Docker Desktop Kubernetes. Make sure the sandbox image is available in your cluster."
   fi
@@ -372,7 +289,7 @@ if [ "$USE_REDIS" = true ]; then
     
     # Check if Redis started successfully
     if nc -z localhost $REDIS_PORT >/dev/null 2>&1; then
-      log_success "Redis started successfully on port $REDIS_PORT"
+      log_success "Redis started successfully"
     else
       log_error "Failed to start Redis. Please make sure Redis is installed and available."
       exit 1
@@ -381,7 +298,10 @@ if [ "$USE_REDIS" = true ]; then
   
   # Verify Redis connectivity with ping
   if redis-cli -p $REDIS_PORT ping > /dev/null 2>&1; then
-    log_success "Redis connectivity verified with PING"
+    # Only log if verbose mode is enabled
+    if [ "$VERBOSE" = true ]; then
+      log_success "Redis connectivity verified with PING"
+    fi
   else
     log_warning "Redis server is running but ping failed. Continuing anyway..."
   fi
@@ -389,7 +309,7 @@ fi
 
 # Start the event service if enabled
 if [ "$ENABLE_EVENTS" = true ]; then
-  log_info "Starting the Events service on port $EVENTS_PORT..."
+  log_info "Starting the Events service..."
   ./bin/test-events --port=$EVENTS_PORT &
   PIDS+=($!)
 
@@ -398,32 +318,23 @@ if [ "$ENABLE_EVENTS" = true ]; then
 fi
 
 # Start the Scheduler service
-log_info "Starting the Scheduler service on port $SCHEDULER_PORT..."
+log_info "Starting the Scheduler service..."
 
 # Construct scheduler command with Redis params if enabled
 SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE --sandbox-image=$SANDBOX_IMAGE"
 if [ "$DEV_LOGGING" = true ]; then
   SCHEDULER_CMD="$SCHEDULER_CMD --dev-logging"
-  log_info "Development logging enabled"
 fi
 
 if [ "$USE_REDIS" = true ]; then
   REDIS_URI="redis://:$REDIS_PASSWORD@$REDIS_ADDR/$REDIS_DB"
   SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=redis --redis-uri=$REDIS_URI --idempotence-ttl=$IDEMPOTENCE_TTL"
-  log_info "Scheduler will use Redis at $REDIS_ADDR for idempotence with TTL=$IDEMPOTENCE_TTL and sandbox TTL=$SANDBOX_TTL"
-else
-  SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=memory"
-  log_info "Scheduler will run with in-memory idempotence store and sandbox TTL=$SANDBOX_TTL"
 fi
 
 # Add event broadcasting configuration if enabled
 if [ "$ENABLE_EVENTS" = true ]; then
   SCHEDULER_CMD="$SCHEDULER_CMD --event-broadcast=true --event-endpoint=localhost:$EVENTS_PORT"
-  log_info "Event broadcasting enabled to endpoint localhost:$EVENTS_PORT"
 fi
-
-# Log the namespace being used
-log_info "Using Kubernetes namespace: $NAMESPACE"
 
 # Execute scheduler command
 $SCHEDULER_CMD &
@@ -433,7 +344,7 @@ PIDS+=($!)
 check_service_port $SCHEDULER_PORT "Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 
 # Start the Global Scheduler service
-log_info "Starting the Global Scheduler service on port $GLOBAL_PORT..."
+log_info "Starting the Global Scheduler service..."
 ./bin/global-scheduler --port=$GLOBAL_PORT &
 PIDS+=($!)
 

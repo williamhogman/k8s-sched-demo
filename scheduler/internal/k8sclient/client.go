@@ -297,7 +297,6 @@ func (k *K8sClient) StartWatchers() {
 
 // StopWatchers cancels all running watchers
 func (k *K8sClient) StopWatchers() {
-	k.logger.Info("Stopping pod watchers")
 	k.watchCancel()
 	// Close the event channel
 	close(k.eventChan)
@@ -355,19 +354,6 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 		shouldSendEvent = true
 	}
 
-	// Check for unschedulable condition
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
-			if condition.Reason == "Unschedulable" {
-				eventType = types.PodEventUnschedulable
-				reason = condition.Reason
-				message = condition.Message
-				shouldSendEvent = true
-				break
-			}
-		}
-	}
-
 	// If containers are in a terminal state, check for reasons
 	for _, containerStatus := range pod.Status.ContainerStatuses {
 		// Check for waiting containers with issues
@@ -398,10 +384,7 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 
 		select {
 		case k.eventChan <- event:
-			k.logger.Info("Sent pod event to channel",
-				zap.String("pod", pod.Name),
-				zap.String("eventType", string(eventType)),
-				zap.String("reason", reason))
+			// Do nothing
 		default:
 			// If channel is full, log a warning but don't block
 			k.logger.Warn("Event channel full, dropping pod event",

@@ -43,7 +43,6 @@ var (
 	successColor = color.New(color.FgGreen).SprintFunc()
 	errorColor   = color.New(color.FgRed).SprintFunc()
 	warningColor = color.New(color.FgYellow).SprintFunc()
-	noteColor    = color.New(color.FgCyan).SprintFunc()
 )
 
 // Initialize the selector client
@@ -56,7 +55,7 @@ func NewSelectorClient(port int) *SelectorClient {
 	return &SelectorClient{client: client}
 }
 
-// Log functions
+// Log functions - simplified
 func logInfo(format string, args ...interface{}) {
 	log.Printf("%s %s", infoColor("[INFO]"), fmt.Sprintf(format, args...))
 }
@@ -71,10 +70,6 @@ func logError(format string, args ...interface{}) {
 
 func logWarning(format string, args ...interface{}) {
 	log.Printf("%s %s", warningColor("[WARNING]"), fmt.Sprintf(format, args...))
-}
-
-func logNote(format string, args ...interface{}) {
-	log.Printf("%s %s", noteColor("[NOTE]"), fmt.Sprintf(format, args...))
 }
 
 // Helper to convert time to human-readable format
@@ -189,19 +184,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Print demo header and info
-	logInfo("Starting K8s Scheduler Demo Client")
-	logNote("This demo showcases sandbox creation, idempotence, retention, and lifecycle management")
-
-	// Check if the event service might be running
-	_, err := http.Get("http://localhost:50053")
-	if err == nil {
-		logNote("Event broadcasting appears to be enabled - sandbox lifecycle events will be broadcast")
-		logNote("Events include: SCHEDULED, RETAINED, RELEASED, EXPIRED, and FAILED")
-	}
-
 	// Initialize the selector client
-	logInfo("Initializing client for global scheduler at port %d", *globalPort)
 	client := NewSelectorClient(*globalPort)
 
 	// Metadata for the sandbox request
@@ -210,18 +193,15 @@ func main() {
 		"owner":   "user",
 	}
 
-	// Log the namespace being used
-	logInfo("Using Kubernetes namespace: %s", *namespace)
-
 	// Make the first GetSandbox request
-	logInfo("Making API request to get a sandbox with key: %s", *idempotenceKey)
+	logInfo("Requesting sandbox with key: %s", *idempotenceKey)
 	resp, err := client.GetSandbox(ctx, *idempotenceKey, metadata)
 	if err != nil {
 		logError("Failed to get sandbox: %v", err)
 		os.Exit(1)
 	}
 
-	logSuccess("Sandbox created successfully with ID: %s on cluster: %s", resp.SandboxId, resp.ClusterId)
+	logSuccess("Sandbox created: %s on cluster: %s", resp.SandboxId, resp.ClusterId)
 
 	// Store sandbox and cluster IDs for later use
 	sandboxID := resp.SandboxId
@@ -229,7 +209,6 @@ func main() {
 
 	// Demonstrate idempotence if enabled
 	if *showIdempotence {
-		logInfo("Waiting 2 seconds before making identical request to demonstrate idempotence...")
 		time.Sleep(2 * time.Second)
 
 		secondResp, err := client.GetSandbox(ctx, *idempotenceKey, metadata)
@@ -237,14 +216,9 @@ func main() {
 			logError("Failed to make second sandbox request: %v", err)
 		} else {
 			if secondResp.SandboxId == sandboxID {
-				logSuccess("Idempotence verified: Second request returned the same sandbox ID (%s)", secondResp.SandboxId)
-
-				if secondResp.ClusterId != clusterID {
-					logInfo("Note: Different cluster IDs returned (%s vs %s), which is fine for demo purposes",
-						clusterID, secondResp.ClusterId)
-				}
+				logSuccess("Idempotence verified: Same sandbox ID (%s)", secondResp.SandboxId)
 			} else {
-				logWarning("Idempotence may not be working correctly: Got different sandbox IDs (%s vs %s)",
+				logWarning("Idempotence issue: Different sandbox IDs (%s vs %s)",
 					sandboxID, secondResp.SandboxId)
 			}
 		}
@@ -252,11 +226,9 @@ func main() {
 
 	// Demonstrate sandbox retention if enabled
 	if *retainSandbox {
-		logInfo("Demonstrating sandbox retention (extending expiration)...")
+		logInfo("Demonstrating sandbox retention...")
 
 		for i := 1; i <= *retainCount; i++ {
-			logInfo("Retain operation %d of %d...", i, *retainCount)
-
 			retainResp, err := client.RetainSandbox(ctx, sandboxID, clusterID)
 			if err != nil {
 				logError("Failed to retain sandbox: %v", err)
@@ -265,7 +237,7 @@ func main() {
 
 			if retainResp.Success {
 				expirationTime := formatTime(retainResp.ExpirationTime)
-				logSuccess("Sandbox %s successfully retained! New expiration: %s", sandboxID, expirationTime)
+				logSuccess("Sandbox retained. New expiration: %s", expirationTime)
 			} else if retainResp.Error != "" {
 				logError("Failed to retain sandbox: %s", retainResp.Error)
 				break
@@ -280,25 +252,18 @@ func main() {
 
 	// Demonstrate sandbox release if enabled
 	if *releaseSandbox {
-		logInfo("Waiting 3 seconds before releasing the sandbox...")
 		time.Sleep(3 * time.Second)
 
-		logInfo("Releasing the sandbox...")
+		logInfo("Releasing sandbox...")
 		releaseResp, err := client.ReleaseSandbox(ctx, sandboxID, clusterID)
 		if err != nil {
 			logError("Failed to release sandbox: %v", err)
 		} else if releaseResp.Success {
-			logSuccess("Sandbox %s successfully released!", sandboxID)
+			logSuccess("Sandbox released: %s", sandboxID)
 		} else {
 			logError("Failed to release sandbox: %s", releaseResp.Error)
 		}
 	}
 
-	logSuccess("Demo completed successfully!")
-
-	// Print event system reference at the end
-	_, err = http.Get("http://localhost:50053")
-	if err == nil {
-		logNote("For more information on the event broadcasting system, see EVENT-SYSTEM.md")
-	}
+	logSuccess("Demo completed")
 }

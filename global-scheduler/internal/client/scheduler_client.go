@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -49,7 +48,6 @@ func (c *SchedulerClient) ScheduleSandbox(ctx context.Context, endpoint string, 
 	})
 
 	// Make the request
-	log.Printf("Scheduling sandbox with key %s at endpoint %s", idempotenceKey, endpoint)
 	resp, err := client.ScheduleSandbox(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to schedule sandbox: %v", err)
@@ -73,7 +71,6 @@ func (c *SchedulerClient) ReleaseSandbox(ctx context.Context, endpoint string, s
 	})
 
 	// Make the request
-	log.Printf("Releasing sandbox %s at endpoint %s", sandboxID, endpoint)
 	resp, err := client.ReleaseSandbox(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to release sandbox: %v", err)
@@ -97,7 +94,6 @@ func (c *SchedulerClient) RetainSandbox(ctx context.Context, endpoint string, sa
 	})
 
 	// Make the request
-	log.Printf("Retaining sandbox %s at endpoint %s", sandboxID, endpoint)
 	resp, err := client.RetainSandbox(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retain sandbox: %v", err)

@@ -34,8 +34,6 @@ func (s *GlobalSchedulerServer) GetSandbox(
 	ctx context.Context,
 	req *connect.Request[selectorv1.GetSandboxRequest],
 ) (*connect.Response[selectorv1.GetSandboxResponse], error) {
-	log.Println("Request headers:", req.Header())
-
 	// Pass the request directly to the service
 	resp, err := s.selectorService.GetSandbox(ctx, req.Msg)
 	if err != nil {
@@ -54,8 +52,6 @@ func (s *GlobalSchedulerServer) ReleaseSandbox(
 	ctx context.Context,
 	req *connect.Request[selectorv1.ReleaseSandboxRequest],
 ) (*connect.Response[selectorv1.ReleaseSandboxResponse], error) {
-	log.Println("Request headers:", req.Header())
-
 	// Pass the request directly to the service
 	resp, err := s.selectorService.ReleaseSandbox(ctx, req.Msg)
 	if err != nil {
@@ -74,8 +70,6 @@ func (s *GlobalSchedulerServer) RetainSandbox(
 	ctx context.Context,
 	req *connect.Request[selectorv1.RetainSandboxRequest],
 ) (*connect.Response[selectorv1.RetainSandboxResponse], error) {
-	log.Println("Request headers:", req.Header())
-
 	// Pass the request directly to the service
 	resp, err := s.selectorService.RetainSandbox(ctx, req.Msg)
 	if err != nil {
@@ -123,13 +117,13 @@ func main() {
 
 	// Start the server
 	addr := fmt.Sprintf(":%d", *port)
-	log.Printf("Starting Global Scheduler server with Connect API on %s", addr)
+	log.Printf("Global Scheduler server started on %s", addr)
 	if err := http.ListenAndServe(
 		addr,
 		// Use h2c so we can serve HTTP/2 without TLS
 		h2c.NewHandler(mux, &http2.Server{}),
 	); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		log.Fatalf("Server failed: %v", err)
 	}
 }
 
@@ -144,10 +138,7 @@ func addSampleClusters(storage *storage.MemoryStorage) {
 	for _, cluster := range clusters {
 		err := storage.AddCluster(cluster)
 		if err != nil {
-			log.Printf("Failed to add sample cluster %s: %v", cluster.ClusterID, err)
-		} else {
-			log.Printf("Added sample cluster: %s (Priority: %d, Weight: %d)",
-				cluster.ClusterID, cluster.Priority, cluster.Weight)
+			log.Printf("Failed to add cluster %s: %v", cluster.ClusterID, err)
 		}
 	}
 }
