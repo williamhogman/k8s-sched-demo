@@ -111,12 +111,14 @@ func (s *SchedulerService) startEventProcessing() {
 // handlePodEvent processes pod events from the k8s client
 func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 	sandboxID := event.PodName
+	eventType := string(event.EventType)
 
 	// Define bad events that should trigger sandbox release
 	isBadEvent := event.EventType == types.PodEventFailed ||
 		event.EventType == types.PodEventUnschedulable ||
 		event.EventType == types.PodEventTerminated
 
+	// Quick return for non-actionable events
 	if !isBadEvent {
 		return
 	}
@@ -124,24 +126,30 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 	// Check if we've already handled this event
 	shouldHandle, _ := s.shouldHandlePodEvent(s.eventCtx, sandboxID)
 	if !shouldHandle {
-		s.logger.Info("Already processed event for this sandbox",
-			zap.String("sandboxID", sandboxID))
+		// Only log once for duplicate events
+		s.logger.Debug("Skipping already processed event",
+			zap.String("sandboxID", sandboxID),
+			zap.String("eventType", eventType),
+			zap.String("reason", event.Reason))
 		return
 	}
 
-	// Log action about to be taken
-	s.logger.Info("Bad event detected - releasing sandbox",
+	// Create a log context that we can build up
+	logContext := []zap.Field{
 		zap.String("sandboxID", sandboxID),
-		zap.String("eventType", string(event.EventType)),
-		zap.String("reason", event.Reason))
+		zap.String("eventType", eventType),
+		zap.String("reason", event.Reason),
+	}
+	if event.Message != "" {
+		logContext = append(logContext, zap.String("message", event.Message))
+	}
 
-	// Release the sandbox
 	_, err := s.ReleaseSandbox(s.eventCtx, sandboxID)
 	if err != nil {
-		// Log error but continue to broadcasting
-		s.logger.Error("Failed to release sandbox",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Error("Failed to release sandbox after bad pod event", logContext...)
+	} else {
+		s.logger.Info("Released sandbox because of bad pod event", logContext...)
 	}
 }
 
@@ -163,34 +171,31 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		return "", false, fmt.Errorf("idempotence key cannot be empty")
 	}
 
-	s.logger.Info("Scheduling sandbox", zap.String("idempotenceKey", idempotenceKey))
+	// Create log context that we'll build up throughout the function
+	logContext := []zap.Field{zap.String("idempotenceKey", idempotenceKey)}
 
 	// Check if we already have a sandbox for this idempotence key
 	sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
 	if err == nil && sandboxID != "" {
 		// We found an existing sandbox for this idempotence key
-		s.logger.Info("Found existing sandbox",
-			zap.String("idempotenceKey", idempotenceKey),
-			zap.String("sandboxID", sandboxID))
+		logContext = append(logContext, zap.String("sandboxID", sandboxID), zap.Bool("reused", true))
+		s.logger.Info("Found existing sandbox for idempotence key", logContext...)
 		return sandboxID, true, nil // Return the existing sandbox, not newly created
 	} else if err != nil && err != persistence.ErrNotFound {
 		// Only log actual errors, not key not found
-		s.logger.Warn("Error when checking idempotence key",
-			zap.String("idempotenceKey", idempotenceKey),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Warn("Error checking idempotence key", logContext...)
 	}
 
 	// Try to mark this idempotence key as pending creation to handle concurrent requests
 	marked, err := s.store.MarkPendingCreation(ctx, idempotenceKey, s.idempotenceKeyTTL)
 	if err != nil {
-		s.logger.Warn("Error marking pending creation",
-			zap.String("idempotenceKey", idempotenceKey),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Warn("Error marking pending creation", logContext...)
 		// Continue anyway, worst case we create multiple sandboxes
 	} else if !marked {
 		// Someone else is already creating a sandbox for this key
-		s.logger.Info("Concurrent creation detected",
-			zap.String("idempotenceKey", idempotenceKey))
+		s.logger.Debug("Concurrent creation detected", logContext...)
 
 		// Wait for a short time and check if the sandbox ID is available
 		for i := 0; i < 10; i++ { // Try up to 10 times
@@ -198,66 +203,62 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 
 			sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
 			if err == nil && sandboxID != "" {
-				s.logger.Info("Found sandbox created by concurrent request",
-					zap.String("sandboxID", sandboxID))
+				logContext = append(logContext,
+					zap.String("sandboxID", sandboxID),
+					zap.Int("attempt", i+1),
+					zap.Bool("concurrent", true))
+				s.logger.Info("Found sandbox created by concurrent request", logContext...)
 				return sandboxID, false, nil
 			}
 		}
 
-		// If we still don't have a sandbox after waiting, proceed with creation
-		s.logger.Info("Timed out waiting for concurrent creation, proceeding with own creation",
-			zap.String("idempotenceKey", idempotenceKey))
+		logContext = append(logContext, zap.Int("waitAttempts", 10))
+		s.logger.Info("Timed out waiting for concurrent creation, proceeding with own creation", logContext...)
 	}
 
 	// Generate a unique pod name
 	podName := generatePodName()
-	s.logger.Info("Generated pod name",
-		zap.String("podName", podName),
-		zap.String("idempotenceKey", idempotenceKey))
+	logContext = append(logContext, zap.String("podName", podName))
 
 	// Schedule the sandbox on Kubernetes
 	podName, err = s.k8sClient.ScheduleSandbox(ctx, podName, metadata)
 	if err != nil {
-		s.logger.Error("Failed to schedule sandbox",
-			zap.String("idempotenceKey", idempotenceKey),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Error("Failed to schedule sandbox", logContext...)
+
 		// Clean up the pending marker since creation failed
 		if cleanupErr := s.store.ReleaseIdempotenceKey(ctx, idempotenceKey); cleanupErr != nil {
 			s.logger.Warn("Failed to clean up pending marker",
-				zap.String("idempotenceKey", idempotenceKey),
-				zap.Error(cleanupErr))
+				append(logContext, zap.Error(cleanupErr))...)
 		}
+
 		return "", false, fmt.Errorf("failed to schedule: %v", err)
 	}
 
+	// Keep track of any non-fatal issues during the completion process
+	var issues []string
+
 	// Store the mapping from idempotence key to sandbox ID and complete the pending operation
 	if err := s.store.CompletePendingCreation(ctx, idempotenceKey, podName, s.idempotenceKeyTTL); err != nil {
-		// Just log the error, don't fail the request
-		s.logger.Warn("Failed to store idempotence mapping",
-			zap.Error(err))
-	} else {
-		s.logger.Info("Stored idempotence mapping",
-			zap.String("idempotenceKey", idempotenceKey),
-			zap.String("podName", podName),
-			zap.Duration("ttl", s.idempotenceKeyTTL))
+		issues = append(issues, fmt.Sprintf("failed to store idempotence mapping: %v", err))
 	}
 
 	// Set the initial expiration time for the sandbox
 	expirationTime := time.Now().Add(s.sandboxTTL)
+	logContext = append(logContext, zap.Time("expirationTime", expirationTime))
+
 	if err := s.store.SetSandboxExpiration(ctx, podName, expirationTime); err != nil {
-		s.logger.Warn("Failed to set initial expiration for sandbox",
-			zap.String("podName", podName),
-			zap.Error(err))
-		// Don't fail the request, just log the warning
-	} else {
-		s.logger.Info("Set expiration for sandbox",
-			zap.String("podName", podName),
-			zap.Time("expirationTime", expirationTime))
+		issues = append(issues, fmt.Sprintf("failed to set expiration: %v", err))
 	}
 
-	s.logger.Info("Successfully scheduled sandbox",
-		zap.String("idempotenceKey", idempotenceKey),
-		zap.String("podName", podName))
+	// Add issues to log context if any occurred
+	if len(issues) > 0 {
+		logContext = append(logContext, zap.Strings("issues", issues))
+		s.logger.Warn("Created sandbox with non-fatal issues", logContext...)
+	} else {
+		s.logger.Info("Successfully scheduled sandbox", logContext...)
+	}
+
 	return podName, true, nil
 }
 
@@ -284,31 +285,28 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 		return false, fmt.Errorf("sandbox ID cannot be empty")
 	}
 
-	s.logger.Info("Releasing sandbox", zap.String("sandboxID", sandboxID))
+	// Create log context with sandbox ID
+	logContext := []zap.Field{zap.String("sandboxID", sandboxID)}
+
+	// Keep track of any non-fatal issues
+	var issues []string
 
 	// Remove from the expiration tracking
 	if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
-		s.logger.Warn("Failed to remove expiration for sandbox",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
-		// Continue with the release even if we fail to remove the expiration
+		issues = append(issues, fmt.Sprintf("failed to remove expiration: %v", err))
 	}
 
 	// Release the sandbox on Kubernetes
 	err := s.k8sClient.ReleaseSandbox(ctx, sandboxID)
 	if err != nil {
-		s.logger.Error("Failed to release sandbox",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Error("Failed to release sandbox in Kubernetes", logContext...)
 		return false, fmt.Errorf("failed to release: %v", err)
 	}
 
 	// Mark the sandbox as released to avoid duplicate operations
 	if err := s.store.MarkSandboxReleased(ctx, sandboxID, 5*time.Minute); err != nil {
-		s.logger.Warn("Failed to mark sandbox as released",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
-		// This is not critical, just a warning
+		issues = append(issues, fmt.Sprintf("failed to mark as released: %v", err))
 	}
 
 	// Broadcast the terminated event
@@ -318,13 +316,17 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 	}
 
 	if err := s.eventBroadcaster.BroadcastEvent(ctx, broadcastEvent); err != nil {
-		s.logger.Warn("Failed to broadcast sandbox termination event",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
-		// Don't fail the request just because we couldn't broadcast the event
+		issues = append(issues, fmt.Sprintf("failed to broadcast event: %v", err))
 	}
 
-	s.logger.Info("Successfully released sandbox", zap.String("sandboxID", sandboxID))
+	// Add issues to log context if any occurred
+	if len(issues) > 0 {
+		logContext = append(logContext, zap.Strings("issues", issues))
+		s.logger.Warn("Released sandbox with non-fatal issues", logContext...)
+	} else {
+		s.logger.Info("Successfully released sandbox", logContext...)
+	}
+
 	return true, nil
 }
 
@@ -334,33 +336,32 @@ func (s *SchedulerService) RetainSandbox(ctx context.Context, sandboxID string) 
 		return time.Time{}, false, fmt.Errorf("sandbox ID cannot be empty")
 	}
 
-	s.logger.Info("Retaining sandbox", zap.String("sandboxID", sandboxID))
+	// Create base log context
+	logContext := []zap.Field{zap.String("sandboxID", sandboxID)}
 
 	// Check if the sandbox was already released
 	released, err := s.store.IsSandboxReleased(ctx, sandboxID)
 	if err != nil {
-		s.logger.Warn("Error checking if sandbox is released",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Warn("Error checking if sandbox is released", logContext...)
 		// Continue anyway, worst case we try to extend a released sandbox
 	} else if released {
-		s.logger.Info("Cannot retain sandbox as it has already been released",
-			zap.String("sandboxID", sandboxID))
+		s.logger.Info("Cannot retain sandbox as it has already been released", logContext...)
 		return time.Time{}, false, fmt.Errorf("sandbox has already been released")
 	}
 
 	// Extend the expiration time
 	newExpiration, err := s.store.ExtendSandboxExpiration(ctx, sandboxID, s.sandboxTTL)
 	if err != nil {
-		s.logger.Error("Failed to extend expiration for sandbox",
-			zap.String("sandboxID", sandboxID),
-			zap.Error(err))
+		logContext = append(logContext, zap.Error(err))
+		s.logger.Error("Failed to extend expiration for sandbox", logContext...)
 		return time.Time{}, false, fmt.Errorf("failed to extend expiration: %v", err)
 	}
 
-	s.logger.Info("Successfully extended expiration for sandbox",
-		zap.String("sandboxID", sandboxID),
-		zap.Time("newExpiration", newExpiration))
+	// Log success with updated expiration time
+	logContext = append(logContext, zap.Time("newExpiration", newExpiration))
+	s.logger.Info("Successfully extended sandbox expiration", logContext...)
+
 	return newExpiration, true, nil
 }
 
@@ -370,84 +371,54 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSiz
 		batchSize = 10 // Default batch size
 	}
 
-	s.logger.Info("Looking for expired sandboxes", zap.Int("batchSize", batchSize))
-
 	// Get sandboxes that have expired
 	now := time.Now()
 	expiredSandboxes, err := s.store.GetExpiredSandboxes(ctx, now, batchSize)
 	if err != nil {
-		s.logger.Error("Error getting expired sandboxes", zap.Error(err))
 		return 0, fmt.Errorf("failed to get expired sandboxes: %v", err)
 	}
 
-	if len(expiredSandboxes) == 0 {
-		s.logger.Info("No expired sandboxes found")
-		return 0, nil
-	}
-
-	s.logger.Info("Found expired sandboxes to clean up", zap.Int("count", len(expiredSandboxes)))
-
+	// Track counts for summary
+	totalCount := len(expiredSandboxes)
 	releasedCount := 0
-	for _, sandboxID := range expiredSandboxes {
-		// Check if already marked as released to avoid duplicate work
-		released, err := s.store.IsSandboxReleased(ctx, sandboxID)
-		if err != nil {
-			s.logger.Warn("Error checking if sandbox is released",
-				zap.String("sandboxID", sandboxID),
-				zap.Error(err))
-			// Continue to next sandbox
-			continue
-		}
+	skippedCount := 0
+	failedCount := 0
+	var failedIDs []string
 
-		if released {
-			s.logger.Info("Sandbox is already marked as released, skipping",
-				zap.String("sandboxID", sandboxID))
-
-			// Remove from expiration tracking since it's already released
-			if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
-				s.logger.Warn("Failed to remove expiration for released sandbox",
-					zap.String("sandboxID", sandboxID),
-					zap.Error(err))
+	// If there are expired sandboxes to process
+	if totalCount > 0 {
+		// Process each expired sandbox
+		for _, sandboxID := range expiredSandboxes {
+			success, err := s.ReleaseSandbox(ctx, sandboxID)
+			if err != nil {
+				failedCount++
+				failedIDs = append(failedIDs, sandboxID)
+			} else if success {
+				releasedCount++
 			}
-
-			continue
-		}
-
-		// Release the sandbox
-		s.logger.Info("Releasing expired sandbox", zap.String("sandboxID", sandboxID))
-		success, err := s.ReleaseSandbox(ctx, sandboxID)
-		if err != nil {
-			s.logger.Error("Failed to release expired sandbox",
-				zap.String("sandboxID", sandboxID),
-				zap.Error(err))
-
-			// Even if the release failed, still try to broadcast the terminated event
-			// as the upstream systems should know this sandbox is no longer usable
-			terminatedEvent := events.Event{
-				SandboxID: sandboxID,
-				Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
-			}
-
-			if broadcastErr := s.eventBroadcaster.BroadcastEvent(ctx, terminatedEvent); broadcastErr != nil {
-				s.logger.Warn("Failed to broadcast sandbox termination event",
-					zap.String("sandboxID", sandboxID),
-					zap.Error(broadcastErr))
-			}
-
-			// Continue to next sandbox
-			continue
-		}
-
-		if success {
-			releasedCount++
-			s.logger.Info("Successfully released expired sandbox",
-				zap.String("sandboxID", sandboxID))
 		}
 	}
 
-	s.logger.Info("Cleanup completed",
-		zap.Int("releasedCount", releasedCount),
-		zap.Int("totalExpired", len(expiredSandboxes)))
+	// Log a single summary line with all the stats
+	logContext := []zap.Field{
+		zap.Int("batchSize", batchSize),
+		zap.Int("expiredTotal", totalCount),
+		zap.Int("released", releasedCount),
+		zap.Int("skipped", skippedCount),
+		zap.Int("failed", failedCount),
+	}
+
+	// Only add failed IDs if there were any
+	if failedCount > 0 {
+		logContext = append(logContext, zap.Strings("failedIDs", failedIDs))
+		s.logger.Warn("Expired sandboxes cleanup completed with some failures", logContext...)
+	} else if totalCount > 0 {
+		s.logger.Info("Expired sandboxes cleanup completed successfully", logContext...)
+	} else {
+		// For zero expired sandboxes, log at debug level
+		s.logger.Debug("No expired sandboxes to clean up", logContext...)
+	}
+
 	return releasedCount, nil
 }
 

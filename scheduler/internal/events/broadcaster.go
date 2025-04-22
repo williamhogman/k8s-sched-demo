@@ -71,9 +71,6 @@ func (b *Broadcaster) BroadcastEvent(ctx context.Context, event Event) error {
 	// Try to add to channel with context deadline
 	select {
 	case b.eventChan <- event:
-		b.logger.Debug("Added event to broadcast queue",
-			zap.String("sandboxID", event.SandboxID),
-			zap.Int32("type", int32(event.Type)))
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("context deadline exceeded while enqueueing event")
