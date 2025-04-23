@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package will.scheduler.v1;
+
+option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1;schedulerv1";
+
+// ProjectService manages project-level sandbox assignments and routing
+service ProjectService {
+  // GetProjectSandbox returns the active sandbox for a project, or initiates creation of one
+  rpc GetProjectSandbox(GetProjectSandboxRequest) returns (GetProjectSandboxResponse) {}
+  
+  // ReleaseProjectSandbox releases the current sandbox for a project
+  rpc ReleaseProjectSandbox(ReleaseProjectSandboxRequest) returns (ReleaseProjectSandboxResponse) {}
+  
+  // GetProjectStatus returns the current status of a project's sandbox
+  rpc GetProjectStatus(GetProjectStatusRequest) returns (GetProjectStatusResponse) {}
+}
+
+// GetProjectSandboxRequest is used to request a sandbox for a project
+message GetProjectSandboxRequest {
+  // project_id is the unique identifier for the project
+  string project_id = 1;
+  
+  // metadata is optional metadata to be attached to the sandbox
+  map<string, string> metadata = 2;
+  
+  // wait_for_creation if true, will wait for sandbox creation if none exists
+  bool wait_for_creation = 3;
+}
+
+// GetProjectSandboxResponse contains the sandbox information for a project
+message GetProjectSandboxResponse {
+  // sandbox_id is the ID of the active sandbox for the project
+  string sandbox_id = 1;
+  
+  // status indicates the current status of the sandbox
+  ProjectSandboxStatus status = 2;
+}
+
+// ReleaseProjectSandboxRequest is used to release a project's sandbox
+message ReleaseProjectSandboxRequest {
+  // project_id is the unique identifier for the project
+  string project_id = 1;
+}
+
+// ReleaseProjectSandboxResponse contains the result of releasing a project's sandbox
+message ReleaseProjectSandboxResponse {
+  // success indicates if the release was successful
+  bool success = 1;
+  
+  // released_sandbox_id is the ID of the sandbox that was released
+  string released_sandbox_id = 2;
+}
+
+// GetProjectStatusRequest is used to check the status of a project's sandbox
+message GetProjectStatusRequest {
+  // project_id is the unique identifier for the project
+  string project_id = 1;
+}
+
+// GetProjectStatusResponse contains the current status of a project's sandbox
+message GetProjectStatusResponse {
+  // status indicates the current status of the project's sandbox
+  ProjectSandboxStatus status = 1;
+  
+  // sandbox_id is the ID of the active sandbox, if any
+  string sandbox_id = 2;
+}
+
+// ProjectSandboxStatus represents the current status of a project's sandbox
+enum ProjectSandboxStatus {
+  // PROJECT_SANDBOX_STATUS_UNSPECIFIED is the default status
+  PROJECT_SANDBOX_STATUS_UNSPECIFIED = 0;
+  
+  // PROJECT_SANDBOX_STATUS_ACTIVE indicates the sandbox is active and ready
+  PROJECT_SANDBOX_STATUS_ACTIVE = 1;
+  
+  // PROJECT_SANDBOX_STATUS_CREATING indicates a sandbox is being created
+  PROJECT_SANDBOX_STATUS_CREATING = 2;
+  
+  // PROJECT_SANDBOX_STATUS_NOT_FOUND indicates no sandbox exists for the project
+  PROJECT_SANDBOX_STATUS_NOT_FOUND = 3;
+  
+  // PROJECT_SANDBOX_STATUS_ERROR indicates there was an error with the sandbox
+  PROJECT_SANDBOX_STATUS_ERROR = 4;
+} 
