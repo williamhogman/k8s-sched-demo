@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 )
 
@@ -14,6 +15,7 @@ import (
 type ProjectService struct {
 	schedulerService *SchedulerService
 	store            persistence.Store
+	k8sClient        k8sclient.K8sClientInterface
 	logger           *zap.Logger
 }
 
@@ -21,11 +23,13 @@ type ProjectService struct {
 func NewProjectService(
 	schedulerService *SchedulerService,
 	store persistence.Store,
+	k8sClient k8sclient.K8sClientInterface,
 	logger *zap.Logger,
 ) *ProjectService {
 	return &ProjectService{
 		schedulerService: schedulerService,
 		store:            store,
+		k8sClient:        k8sClient,
 		logger:           logger.Named("project-service"),
 	}
 }
@@ -44,9 +48,11 @@ func (s *ProjectService) GetProjectSandbox(
 	sandboxID, err := s.store.GetProjectSandbox(ctx, projectID)
 	if err == nil && sandboxID != "" {
 		// Project has an active sandbox
+		hostname := s.k8sClient.GetProjectServiceHostname(sandboxID)
 		return &schedulerv1.GetProjectSandboxResponse{
 			SandboxId: sandboxID,
 			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
+			Hostname:  hostname,
 		}, nil
 	}
 
@@ -82,9 +88,17 @@ func (s *ProjectService) GetProjectSandbox(
 		// Continue anyway, the sandbox is created
 	}
 
+	// Create or update the headless service for this project
+	if err := s.k8sClient.CreateOrUpdateProjectService(ctx, projectID, sandboxID); err != nil {
+		s.logger.Error("Failed to create/update project service",
+			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+		// Continue anyway, the sandbox is created
+	}
+
 	return &schedulerv1.GetProjectSandboxResponse{
 		SandboxId: sandboxID,
 		Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
+		Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
 	}, nil
 }
 
@@ -125,6 +139,13 @@ func (s *ProjectService) ReleaseProjectSandbox(
 	// Remove the project-sandbox mapping
 	if err := s.store.RemoveProjectSandbox(ctx, projectID); err != nil {
 		s.logger.Error("Failed to remove project-sandbox mapping",
+			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+		// Continue anyway, the sandbox is released
+	}
+
+	// Delete the project's headless service
+	if err := s.k8sClient.DeleteProjectService(ctx, projectID); err != nil {
+		s.logger.Error("Failed to delete project service",
 			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
 		// Continue anyway, the sandbox is released
 	}

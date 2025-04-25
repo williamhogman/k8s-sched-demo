@@ -42,6 +42,7 @@
             
             # Kubernetes tools
             kubectl
+            skaffold
             kubernetes-helm
             
             # Database

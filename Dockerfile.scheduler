@@ -10,8 +10,9 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Build the mock-sandbox binary
-RUN cd cmd/server && go build -o /build/sandbox .
+# Build the scheduler binary
+RUN cd scheduler/cmd/server && \
+    go build -o /build/scheduler .
 
 # Final lightweight image
 FROM alpine:latest
@@ -19,14 +20,12 @@ FROM alpine:latest
 WORKDIR /app
 
 # Copy the binary from the builder stage
-COPY --from=builder /build/sandbox /app/sandbox
+COPY --from=builder /build/scheduler /app/scheduler
 
 # Install required system tools and make binary executable
 RUN apk add --no-cache ca-certificates && \
-    chmod +x /app/sandbox
+    chmod +x /app/scheduler
 
-# Expose the server port
-EXPOSE 8000
+EXPOSE 50051
 
-# Set the entry point
-ENTRYPOINT ["/app/sandbox"] 
+ENTRYPOINT ["/app/scheduler"] 

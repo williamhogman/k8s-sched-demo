@@ -1,76 +1,109 @@
-# Kubernetes Scheduler Demo System
+# Kubernetes Scheduler Demo
 
-A demonstration of a Kubernetes sandbox scheduling system with idempotence, expiration management, and local event handling.
-
-## Overview
-
-This demo showcases a multi-component system for scheduling and managing ephemeral Kubernetes sandbox environments:
-
-1. **Scheduler Service** - Creates and manages sandboxes in Kubernetes clusters with TTL expiration
-2. **Demo Client** - Interacts with the system to demonstrate features
-
-## Architecture
-
-The system demonstrates several important architectural patterns:
-
-- **Idempotence** - Safely handle duplicate requests using Redis
-- **Local Event Handling** - Internal event processing for sandbox lifecycle events
-- **TTL Management** - Auto-expiration and cleanup of resources
+This project demonstrates a custom Kubernetes-based scheduler system for managing sandboxes in a Kubernetes cluster. The system provides project-based sandbox allocation, routing, and lifecycle management.
 
 ## Components
 
-### Scheduler Service
+- **Scheduler Service**: Manages sandbox allocation, scheduling, and lifecycle
+- **Mock Sandbox**: A simple sandbox implementation for demonstration
+- **Demo Client**: A client application that demonstrates the system
 
-- Creates sandbox pods in Kubernetes
-- Manages idempotence with Redis or in-memory store
-- Handles sandbox retention and release
-- Tracks expirations and auto-cleans expired sandboxes
-- Processes pod deletion events to clean up project-sandbox mappings
+## Prerequisites
 
-### Demo Client
+- Docker Desktop with Kubernetes enabled or a Kubernetes cluster
+- Go 1.23 or later
+- kubectl configured to access your cluster
+- Buf for Protocol Buffer generation
 
-- Makes API calls to demonstrate system features
-- Shows idempotent sandbox creation
-- Demonstrates sandbox retention and release
+## Quick Start
 
-## Running the Demo
-
-The demo can be run with various options:
+The easiest way to run the demo is using the demo script:
 
 ```bash
-./demo.sh [options]
-```
-
-### Basic Options
-
-- `--no-build` - Skip building binaries
-- `--verbose` - Enable verbose logging
-- `--release` - Demonstrate releasing the sandbox
-- `--retain` - Demonstrate sandbox retention
-
-### Advanced Options
-
-- `--scheduler-port=PORT` - Set scheduler port (default: 50051)
-- `--sandbox-ttl=DURATION` - Set sandbox TTL (default: 15m)
-- `--idempotence-ttl=DURATION` - Set idempotence key TTL (default: 24h)
-- `--no-redis` - Use in-memory store instead of Redis
-
-### Example Usage
-
-Basic demo:
-```bash
+# Run the full demo (build, deploy to K8s, and run client)
 ./demo.sh
+
+# Just show the client demonstration (assumes services are already running)
+./demo.sh --client-only
 ```
 
-Full demo with all features:
+## Manual Deployment
+
+### 1. Build Docker Images
+
 ```bash
-./demo.sh --verbose --retain --release
+# Build the scheduler and mock-sandbox Docker images
+make docker-build
 ```
 
-## Implementation Details
+### 2. Deploy to Kubernetes
 
-- Written in Go with Connect RPC
-- Uses Redis for persistent idempotence with configurable TTL
-- Kubernetes client with mock mode for testing
-- Uber FX for dependency injection
-- Zap for structured logging 
+```bash
+# Deploy to Kubernetes
+make k8s-deploy
+```
+
+### 3. Run the Demo Client
+
+```bash
+# Build and run the demo client
+make build
+./bin/demo --scheduler-host=scheduler.sandbox.svc.cluster.local
+```
+
+## Development
+
+```bash
+# Generate Protocol Buffer files
+make proto
+
+# Build all binaries
+make build
+
+# Run the scheduler locally
+make run-scheduler
+
+# Run the activator service locally
+make run-activator
+```
+
+## Usage Examples
+
+### Get a Sandbox for a Project
+
+```bash
+./bin/demo --project-id=my-project
+```
+
+### Release a Sandbox
+
+```bash
+./bin/demo --project-id=my-project --release
+```
+
+### Retain a Sandbox (extend expiration)
+
+```bash
+./bin/demo --project-id=my-project --retain
+```
+
+## Kubernetes Resources
+
+The demo creates the following Kubernetes resources:
+
+- `sandbox` namespace for all resources
+- Redis deployment for idempotence management
+- Scheduler service deployment
+- On-demand sandbox pods as requested by clients
+
+## Architecture
+
+1. Client requests a sandbox for a project
+2. Scheduler service creates or reuses a sandbox
+3. Scheduler creates a headless service for routing to the sandbox
+4. Client can access the sandbox via the service hostname
+5. Sandboxes are automatically cleaned up after TTL expiration
+
+## License
+
+MIT 

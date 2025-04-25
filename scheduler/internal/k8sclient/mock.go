@@ -2,6 +2,8 @@ package k8sclient
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 	"go.uber.org/zap"
@@ -12,9 +14,8 @@ const (
 	DefaultNamespace = "sandbox"
 )
 
-// MockK8sClient is a mock implementation of the Kubernetes client for testing
+// MockK8sClient provides a simple logging implementation of K8sClientInterface
 type MockK8sClient struct {
-	namespace string
 	logger    *zap.Logger
 	eventChan chan types.PodEvent
 }
@@ -22,52 +23,81 @@ type MockK8sClient struct {
 // NewMockK8sClient creates a new mock K8s client
 func NewMockK8sClient(logger *zap.Logger) *MockK8sClient {
 	return &MockK8sClient{
-		namespace: DefaultNamespace,
 		logger:    logger.Named("mock-k8sclient"),
 		eventChan: make(chan types.PodEvent, 100),
 	}
 }
 
-// GetEventChannel returns the channel for pod events
+// ScheduleSandbox creates a mock sandbox pod
+func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
+	m.logger.Info("Mock ScheduleSandbox called",
+		zap.String("podName", podName),
+		zap.Any("metadata", metadata))
+	return podName, nil
+}
+
+// ReleaseSandbox deletes a mock sandbox pod
+func (m *MockK8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
+	m.logger.Info("Mock ReleaseSandbox called",
+		zap.String("sandboxID", sandboxID))
+	return nil
+}
+
+// GetEventChannel returns the mock event channel
 func (m *MockK8sClient) GetEventChannel() <-chan types.PodEvent {
 	return m.eventChan
 }
 
-// StartWatchers is a no-op in the mock implementation
+// StartWatchers starts mock pod watchers
 func (m *MockK8sClient) StartWatchers() {
-	m.logger.Info("Mock would start watchers", zap.String("namespace", m.namespace))
+	m.logger.Info("Mock StartWatchers called")
 }
 
-// StopWatchers is a no-op in the mock implementation
+// StopWatchers stops mock pod watchers
 func (m *MockK8sClient) StopWatchers() {
-	m.logger.Info("Mock would stop watchers")
-	// Close the event channel
+	m.logger.Info("Mock StopWatchers called")
 	close(m.eventChan)
 }
 
-// ScheduleSandbox simulates scheduling a sandbox on Kubernetes
-func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
-	m.logger.Info("Mock pod scheduled", zap.String("pod", podName), zap.Any("metadata", metadata))
-	return podName, nil
-}
-
-// ReleaseSandbox simulates releasing a sandbox on Kubernetes
-func (m *MockK8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
-	m.logger.Info("Mock pod released", zap.String("pod", sandboxID))
+// CreateOrUpdateProjectService creates or updates a mock project service
+func (m *MockK8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error {
+	m.logger.Info("Mock CreateOrUpdateProjectService called",
+		zap.String("projectID", projectID),
+		zap.String("sandboxID", sandboxID))
 	return nil
 }
 
-// SendEvent sends an event to the pod event channel
-// This is a helper method for testing
-func (m *MockK8sClient) SendEvent(event types.PodEvent) {
+// DeleteProjectService deletes a mock project service
+func (m *MockK8sClient) DeleteProjectService(ctx context.Context, projectID string) error {
+	m.logger.Info("Mock DeleteProjectService called",
+		zap.String("projectID", projectID))
+	return nil
+}
+
+// GetProjectServiceHostname returns a mock project service hostname
+func (m *MockK8sClient) GetProjectServiceHostname(projectID string) string {
+	hostname := fmt.Sprintf("project-%s.%s.svc.cluster.local", projectID, DefaultNamespace)
+	m.logger.Info("Mock GetProjectServiceHostname called",
+		zap.String("projectID", projectID),
+		zap.String("hostname", hostname))
+	return hostname
+}
+
+// SendMockEvent sends a mock pod event to the event channel
+func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, podName string) {
+	event := types.PodEvent{
+		PodName:   podName,
+		EventType: eventType,
+		Reason:    "MockEvent",
+		Message:   "This is a mock event",
+		Timestamp: time.Now(),
+	}
 	select {
 	case m.eventChan <- event:
-		m.logger.Info("Sent mock pod event",
-			zap.String("pod", event.PodName),
-			zap.String("eventType", string(event.EventType)))
+		m.logger.Info("Mock event sent",
+			zap.String("podName", podName),
+			zap.String("eventType", string(eventType)))
 	default:
-		m.logger.Warn("Mock event channel full, dropping event",
-			zap.String("pod", event.PodName),
-			zap.String("eventType", string(event.EventType)))
+		m.logger.Warn("Mock event channel full, dropping event")
 	}
 }

@@ -1,0 +1,27 @@
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+
+# Copy and download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the source code
+COPY . .
+
+# Build the scheduler binary
+RUN go mod tidy && cd activator && go mod tidy && go build -o /app/activator ./cmd/activator
+
+# Final lightweight image
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=builder /app/activator /app/activator
+
+# Install required system tools
+RUN apk add --no-cache ca-certificates
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/activator"] 

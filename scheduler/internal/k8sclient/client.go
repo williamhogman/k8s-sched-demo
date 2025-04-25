@@ -41,6 +41,9 @@ type K8sClient struct {
 	eventChan chan types.PodEvent
 }
 
+// Ensure K8sClient implements K8sClientInterface
+var _ K8sClientInterface = (*K8sClient)(nil)
+
 // NewK8sClient creates a new K8s client
 func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 	// Get kubeconfig from default location
@@ -392,4 +395,92 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 				zap.String("eventType", string(eventType)))
 		}
 	}
+}
+
+// CreateOrUpdateProjectService creates or updates a headless service for a project
+func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error {
+	serviceName := fmt.Sprintf("project-%s", projectID)
+
+	// Create the service specification
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: k.namespace,
+			Labels: map[string]string{
+				"app":        "project-service",
+				"managed-by": "scheduler",
+				"project-id": projectID,
+			},
+			Annotations: map[string]string{
+				"sandbox.scheduler/project-id": projectID,
+				"sandbox.scheduler/sandbox-id": sandboxID,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			// Make it a headless service
+			ClusterIP: "None",
+			// Select pods with matching sandbox ID
+			Selector: map[string]string{
+				"sandbox-id": sandboxID,
+			},
+			// Expose the main container port
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "http",
+					Port:       8000,
+					TargetPort: intstr.FromInt(8000),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+
+	// Try to get existing service
+	existingService, err := k.clientset.CoreV1().Services(k.namespace).Get(ctx, serviceName, metav1.GetOptions{})
+	if err != nil {
+		// Service doesn't exist, create it
+		_, err = k.clientset.CoreV1().Services(k.namespace).Create(ctx, service, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create project service: %v", err)
+		}
+		k.logger.Info("Created project service",
+			zap.String("service", serviceName),
+			zap.String("projectID", projectID),
+			zap.String("sandboxID", sandboxID))
+		return nil
+	}
+
+	// Service exists, update it
+	existingService.Spec.Selector = service.Spec.Selector
+	existingService.Annotations = service.Annotations
+	_, err = k.clientset.CoreV1().Services(k.namespace).Update(ctx, existingService, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update project service: %v", err)
+	}
+
+	k.logger.Info("Updated project service",
+		zap.String("service", serviceName),
+		zap.String("projectID", projectID),
+		zap.String("sandboxID", sandboxID))
+	return nil
+}
+
+// DeleteProjectService deletes a project's headless service
+func (k *K8sClient) DeleteProjectService(ctx context.Context, projectID string) error {
+	serviceName := fmt.Sprintf("project-%s", projectID)
+
+	err := k.clientset.CoreV1().Services(k.namespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete project service: %v", err)
+	}
+
+	k.logger.Info("Deleted project service",
+		zap.String("service", serviceName),
+		zap.String("projectID", projectID))
+	return nil
+}
+
+// GetProjectServiceHostname returns the DNS hostname for a project's service
+func (k *K8sClient) GetProjectServiceHostname(projectID string) string {
+	return fmt.Sprintf("project-%s.%s.svc.cluster.local", projectID, k.namespace)
 }

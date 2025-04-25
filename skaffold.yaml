@@ -1,0 +1,18 @@
+apiVersion: skaffold/v4beta12
+kind: Config
+metadata:
+  name: k-s-sched-demo
+build:
+  local:
+    push: false
+  artifacts:
+    - image: scheduler
+      buildpacks:
+        builder: "gcr.io/buildpacks/builder:v1"
+        env:
+          - "BP_GO_TARGET=scheduler/cmd/server"            
+manifests:
+  rawYaml:
+  - k8s/sandbox-namespace.yaml
+  - k8s/redis-deployment.yaml
+  - k8s/scheduler-deployment.yaml

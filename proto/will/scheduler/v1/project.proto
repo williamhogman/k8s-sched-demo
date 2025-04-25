@@ -35,6 +35,9 @@ message GetProjectSandboxResponse {
   
   // status indicates the current status of the sandbox
   ProjectSandboxStatus status = 2;
+
+  // hostname to use to send traffic
+  string hostname = 3;
 }
 
 // ReleaseProjectSandboxRequest is used to release a project's sandbox

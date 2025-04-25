@@ -7,26 +7,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	k8sclient "github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 	"go.uber.org/zap"
 )
 
-// K8sClientInterface defines the interface for Kubernetes client
-type K8sClientInterface interface {
-	ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error)
-	// We don't define the template-based methods here to avoid import cycles
-	// Template-based pod creation should be used directly with the k8sclient package
-	ReleaseSandbox(ctx context.Context, sandboxID string) error
-	StartWatchers()
-	StopWatchers()
-	// GetEventChannel returns the channel for pod events
-	GetEventChannel() <-chan types.PodEvent
-}
-
 // SchedulerService implements the scheduling service logic
 type SchedulerService struct {
-	k8sClient         K8sClientInterface
+	k8sClient         k8sclient.K8sClientInterface
 	store             persistence.Store
 	idempotenceKeyTTL time.Duration
 	sandboxTTL        time.Duration
@@ -46,7 +35,7 @@ type SchedulerServiceConfig struct {
 
 // NewSchedulerService creates a new scheduler service
 func NewSchedulerService(
-	k8sClient K8sClientInterface,
+	k8sClient k8sclient.K8sClientInterface,
 	store persistence.Store,
 	config SchedulerServiceConfig,
 	logger *zap.Logger,
@@ -54,7 +43,7 @@ func NewSchedulerService(
 	// Create a context for event processing
 	eventCtx, eventCancel := context.WithCancel(context.Background())
 
-	return &SchedulerService{
+	s := &SchedulerService{
 		k8sClient:         k8sClient,
 		store:             store,
 		idempotenceKeyTTL: config.IdempotenceKeyTTL,
@@ -63,6 +52,7 @@ func NewSchedulerService(
 		eventCtx:          eventCtx,
 		eventCancel:       eventCancel,
 	}
+	return s
 }
 
 // startEventProcessing begins listening for pod events from the K8s client
@@ -266,21 +256,46 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	return podName, true, nil
 }
 
-// generatePodName creates a pod name with a standard prefix and a random suffix
+// generatePodName creates a pod name with a standard prefix and a random base36 encoded number
+// that is valid for Kubernetes naming requirements
 func generatePodName() string {
-	// Use a simple prefix plus a shortened UUID for uniqueness
-	// We'll use a shorter UUID to avoid potential truncation issues in processing
-	// and ensure it's a fixed length that's compatible with all client components
+	// Simple prefix + random number approach
 	prefix := "sandbox"
 
-	// Generate a full UUID
-	fullUuid := uuid.New()
+	// Generate a random number
+	randomNum := time.Now().UnixNano() + int64(uuid.New()[0])
 
-	// Convert to a more compact representation - 8 chars should be unique enough
-	// for the demo purposes and avoids any truncation issues
-	shortUuid := fmt.Sprintf("%08x", fullUuid.ID())
+	// Encode the random number in base36
+	id := encodeBase36(randomNum)
 
-	return fmt.Sprintf("%s-%s", prefix, shortUuid)
+	// Truncate to keep the name reasonably short
+	if len(id) > 20 {
+		id = id[:20]
+	}
+
+	return fmt.Sprintf("%s-%s", prefix, id)
+}
+
+// encodeBase36 encodes an integer as a base36 string (0-9a-z)
+func encodeBase36(n int64) string {
+	const charset = "0123456789abcdefghijklmnopqrstuvwxyz"
+	if n == 0 {
+		return "0"
+	}
+
+	var result strings.Builder
+	for n > 0 {
+		result.WriteByte(charset[n%36])
+		n /= 36
+	}
+
+	// Reverse the string
+	runes := []rune(result.String())
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+
+	return string(runes)
 }
 
 // ReleaseSandbox handles deleting a sandbox

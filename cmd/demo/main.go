@@ -30,6 +30,7 @@ var (
 	rawOutput       = flag.Bool("raw", false, "Output raw JSON responses")
 	verbose         = flag.Bool("verbose", false, "Enable verbose logging")
 	namespace       = flag.String("namespace", "sandbox", "Kubernetes namespace to use for sandboxes")
+	schedulerHost   = flag.String("scheduler-host", "localhost", "The scheduler host")
 )
 
 // Client wrapper for the project service
@@ -46,8 +47,8 @@ var (
 )
 
 // Initialize the project client
-func NewProjectClient(port int) *ProjectClient {
-	baseURL := fmt.Sprintf("http://localhost:%d", port)
+func NewProjectClient(port int, hostname string) *ProjectClient {
+	baseURL := fmt.Sprintf("http://%s:%d", hostname, port)
 	client := schedulerv1connect.NewProjectServiceClient(
 		http.DefaultClient,
 		baseURL,
@@ -200,7 +201,7 @@ func main() {
 	}()
 
 	// Initialize the project client
-	client := NewProjectClient(*schedulerPort)
+	client := NewProjectClient(*schedulerPort, *schedulerHost)
 
 	// Metadata for the sandbox request
 	metadata := map[string]string{
@@ -216,7 +217,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logSuccess("Project sandbox created: %s (Status: %s)", resp.SandboxId, statusToString(resp.Status))
+	logSuccess("Project sandbox created: %s (Status: %s, Hostname: %s)", resp.SandboxId, statusToString(resp.Status), resp.Hostname)
 
 	// Store sandbox ID for later use
 	sandboxID := resp.SandboxId
