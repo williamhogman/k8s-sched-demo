@@ -3,11 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/events"
 	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 	"go.uber.org/zap"
@@ -37,8 +36,6 @@ type SchedulerService struct {
 	eventCancel context.CancelFunc
 	// Flag to indicate if event processing is running
 	eventProcessingRunning bool
-	// Event broadcaster
-	eventBroadcaster events.BroadcasterInterface
 }
 
 // SchedulerServiceConfig contains configuration for the scheduler service
@@ -53,24 +50,19 @@ func NewSchedulerService(
 	store persistence.Store,
 	config SchedulerServiceConfig,
 	logger *zap.Logger,
-	eventBroadcaster events.BroadcasterInterface,
 ) *SchedulerService {
-	ctx, cancel := context.WithCancel(context.Background())
-	svc := &SchedulerService{
+	// Create a context for event processing
+	eventCtx, eventCancel := context.WithCancel(context.Background())
+
+	return &SchedulerService{
 		k8sClient:         k8sClient,
 		store:             store,
 		idempotenceKeyTTL: config.IdempotenceKeyTTL,
 		sandboxTTL:        config.SandboxTTL,
-		logger:            logger.Named("scheduler-service"),
-		eventCtx:          ctx,
-		eventCancel:       cancel,
-		eventBroadcaster:  eventBroadcaster,
+		logger:            logger,
+		eventCtx:          eventCtx,
+		eventCancel:       eventCancel,
 	}
-
-	// Start processing pod events
-	svc.startEventProcessing()
-
-	return svc
 }
 
 // startEventProcessing begins listening for pod events from the K8s client
@@ -110,59 +102,71 @@ func (s *SchedulerService) startEventProcessing() {
 
 // handlePodEvent processes pod events from the k8s client
 func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
-	sandboxID := event.PodName
-	eventType := string(event.EventType)
-
-	// Define bad events that should trigger sandbox release
-	isBadEvent := event.EventType == types.PodEventFailed ||
-		event.EventType == types.PodEventUnschedulable ||
-		event.EventType == types.PodEventTerminated
-
-	// Quick return for non-actionable events
-	if !isBadEvent {
+	// Only handle pod deletion events
+	if event.Reason != "Killing" {
 		return
 	}
 
-	// Check if we've already handled this event
-	shouldHandle, _ := s.shouldHandlePodEvent(s.eventCtx, sandboxID)
-	if !shouldHandle {
-		// Only log once for duplicate events
-		s.logger.Debug("Skipping already processed event",
-			zap.String("sandboxID", sandboxID),
-			zap.String("eventType", eventType),
-			zap.String("reason", event.Reason))
+	// Extract pod name from the event
+	podName := event.PodName
+	if podName == "" {
+		s.logger.Warn("received pod event without pod name",
+			zap.String("event_reason", event.Reason),
+			zap.String("event_type", string(event.EventType)),
+		)
 		return
 	}
 
-	// Create a log context that we can build up
-	logContext := []zap.Field{
-		zap.String("sandboxID", sandboxID),
-		zap.String("eventType", eventType),
-		zap.String("reason", event.Reason),
-	}
-	if event.Message != "" {
-		logContext = append(logContext, zap.String("message", event.Message))
+	// Check if this is a sandbox pod
+	if !strings.HasPrefix(podName, "sandbox-") {
+		return
 	}
 
-	_, err := s.ReleaseSandbox(s.eventCtx, sandboxID)
+	// Extract sandbox ID from pod name
+	sandboxID := strings.TrimPrefix(podName, "sandbox-")
+
+	// Find the project associated with this sandbox
+	projectID, err := s.findProjectForSandbox(context.Background(), sandboxID)
 	if err != nil {
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Error("Failed to release sandbox after bad pod event", logContext...)
-	} else {
-		s.logger.Info("Released sandbox because of bad pod event", logContext...)
+		s.logger.Warn("failed to find project for sandbox",
+			zap.String("sandbox_id", sandboxID),
+			zap.Error(err),
+		)
+	} else if projectID != "" {
+		// Remove the project-sandbox mapping
+		if err := s.store.RemoveProjectSandbox(context.Background(), projectID); err != nil {
+			s.logger.Error("failed to remove project-sandbox mapping",
+				zap.String("sandbox_id", sandboxID),
+				zap.String("project_id", projectID),
+				zap.Error(err),
+			)
+		} else {
+			s.logger.Info("removed project-sandbox mapping",
+				zap.String("sandbox_id", sandboxID),
+				zap.String("project_id", projectID),
+			)
+		}
 	}
+
+	// Release the sandbox
+	_, err = s.ReleaseSandbox(context.Background(), sandboxID)
+	if err != nil {
+		s.logger.Error("failed to release sandbox after pod deletion event",
+			zap.String("sandbox_id", sandboxID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	s.logger.Info("released sandbox after pod deletion event",
+		zap.String("sandbox_id", sandboxID),
+	)
 }
 
-// shouldHandlePodEvent checks if we should handle this pod event or if it's already been processed
-// Returns true if we should handle the event, false if we've already handled it
-func (s *SchedulerService) shouldHandlePodEvent(ctx context.Context, sandboxID string) (bool, error) {
-	// We use a short TTL for the failure tracking since we only need to avoid duplicates
-	// during event storms, not long-term tracking
-	const failureTrackingTTL = 10 * time.Minute
-
-	// Try to mark this sandbox as having a processed event
-	// Use the specialized MarkPodEventProcessed method which encapsulates the pod event tracking logic
-	return s.store.MarkPodEventProcessed(ctx, sandboxID, failureTrackingTTL)
+// findProjectForSandbox finds the project ID associated with a sandbox
+func (s *SchedulerService) findProjectForSandbox(ctx context.Context, sandboxID string) (string, error) {
+	// Use the store to find the project ID
+	return s.store.FindProjectForSandbox(ctx, sandboxID)
 }
 
 // ScheduleSandbox handles scheduling a sandbox
@@ -291,13 +295,28 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 	// Keep track of any non-fatal issues
 	var issues []string
 
+	// Find and remove any project-sandbox mapping
+	projectID, err := s.findProjectForSandbox(ctx, sandboxID)
+	if err != nil {
+		issues = append(issues, fmt.Sprintf("failed to find project for sandbox: %v", err))
+	} else if projectID != "" {
+		if err := s.store.RemoveProjectSandbox(ctx, projectID); err != nil {
+			issues = append(issues, fmt.Sprintf("failed to remove project-sandbox mapping: %v", err))
+		} else {
+			s.logger.Info("removed project-sandbox mapping",
+				zap.String("sandbox_id", sandboxID),
+				zap.String("project_id", projectID),
+			)
+		}
+	}
+
 	// Remove from the expiration tracking
 	if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
 		issues = append(issues, fmt.Sprintf("failed to remove expiration: %v", err))
 	}
 
 	// Release the sandbox on Kubernetes
-	err := s.k8sClient.ReleaseSandbox(ctx, sandboxID)
+	err = s.k8sClient.ReleaseSandbox(ctx, sandboxID)
 	if err != nil {
 		logContext = append(logContext, zap.Error(err))
 		s.logger.Error("Failed to release sandbox in Kubernetes", logContext...)
@@ -309,15 +328,8 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 		issues = append(issues, fmt.Sprintf("failed to mark as released: %v", err))
 	}
 
-	// Broadcast the terminated event
-	broadcastEvent := events.Event{
-		SandboxID: sandboxID,
-		Type:      schedulerv1.SandboxEventType_SANDBOX_EVENT_TYPE_TERMINATED,
-	}
-
-	if err := s.eventBroadcaster.BroadcastEvent(ctx, broadcastEvent); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to broadcast event: %v", err))
-	}
+	// No longer broadcasting pod deletion notifications
+	// This is now handled by event notifications
 
 	// Add issues to log context if any occurred
 	if len(issues) > 0 {
@@ -432,13 +444,6 @@ func (s *SchedulerService) Close() error {
 	// Close the store
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	// Close the event broadcaster
-	if s.eventBroadcaster != nil {
-		if err := s.eventBroadcaster.Close(); err != nil {
 			errors = append(errors, err)
 		}
 	}

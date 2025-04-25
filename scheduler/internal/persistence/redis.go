@@ -76,9 +76,14 @@ func (r *redisStore) formExpirationKey() string {
 	return r.keyPrefix + "expirations"
 }
 
-// formEventKey creates a Redis key for tracking pod events
-func (r *redisStore) formEventKey(key string) string {
-	return r.keyPrefix + "event:" + key
+// formProjectSandboxKey creates a Redis key for project-sandbox mapping
+func (r *redisStore) formProjectSandboxKey(projectID string) string {
+	return r.keyPrefix + "project:" + projectID
+}
+
+// formSandboxProjectKey creates a Redis key for sandbox-project mapping (reverse mapping)
+func (r *redisStore) formSandboxProjectKey(sandboxID string) string {
+	return r.keyPrefix + "sandbox:" + sandboxID
 }
 
 // GetSandboxID retrieves the sandbox ID for a given idempotence key
@@ -276,25 +281,120 @@ func (r *redisStore) RedisClient() *redis.Client {
 	return r.client
 }
 
-// setIfNotExists stores a value for a key only if the key doesn't exist
-func (r *redisStore) setIfNotExists(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
-	// Use consistent key formatting
-	redisKey := r.formEventKey(key)
-
-	// SetNX returns true if the key was set (didn't exist before)
-	set, err := r.client.SetNX(ctx, redisKey, value, ttl).Result()
+// GetProjectSandbox returns the sandbox ID for a given project
+func (r *redisStore) GetProjectSandbox(ctx context.Context, projectID string) (string, error) {
+	key := r.formProjectSandboxKey(projectID)
+	sandboxID, err := r.client.Get(ctx, key).Result()
 	if err != nil {
-		return false, fmt.Errorf("failed to set key %s if not exists: %w", key, err)
+		if err == redis.Nil {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("failed to get sandbox for project %s: %w", projectID, err)
 	}
-
-	return set, nil
+	return sandboxID, nil
 }
 
-// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
-func (r *redisStore) MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error) {
-	// Create a tracking key for this pod event
-	trackingKey := "pod-event:" + sandboxID
+// SetProjectSandbox stores the sandbox ID for a given project
+func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID, sandboxID string) error {
+	// Set a reasonable TTL for the project-sandbox mapping (24 hours)
+	const projectSandboxTTL = 24 * time.Hour
 
-	// Use the existing setIfNotExists method to implement this
-	return r.setIfNotExists(ctx, trackingKey, time.Now().Format(time.RFC3339), ttl)
+	// Use a pipeline to set both mappings in a single round-trip
+	pipe := r.client.Pipeline()
+
+	// Set the project -> sandbox mapping
+	projectKey := r.formProjectSandboxKey(projectID)
+	pipe.Set(ctx, projectKey, sandboxID, projectSandboxTTL)
+
+	// Set the sandbox -> project mapping (reverse mapping)
+	sandboxKey := r.formSandboxProjectKey(sandboxID)
+	pipe.Set(ctx, sandboxKey, projectID, projectSandboxTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set project-sandbox mapping: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveProjectSandbox removes the project-sandbox mapping
+func (r *redisStore) RemoveProjectSandbox(ctx context.Context, projectID string) error {
+	// Get the sandbox ID first
+	sandboxID, err := r.GetProjectSandbox(ctx, projectID)
+	if err != nil {
+		if err == ErrNotFound {
+			// No mapping exists, nothing to remove
+			return nil
+		}
+		return fmt.Errorf("failed to get sandbox for project %s: %w", projectID, err)
+	}
+
+	// Use a pipeline to remove both mappings in a single round-trip
+	pipe := r.client.Pipeline()
+
+	// Remove the project -> sandbox mapping
+	projectKey := r.formProjectSandboxKey(projectID)
+	pipe.Del(ctx, projectKey)
+
+	// Remove the sandbox -> project mapping (reverse mapping)
+	sandboxKey := r.formSandboxProjectKey(sandboxID)
+	pipe.Del(ctx, sandboxKey)
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to remove project-sandbox mapping: %w", err)
+	}
+
+	return nil
+}
+
+// FindProjectForSandbox finds the project ID associated with a sandbox
+func (r *redisStore) FindProjectForSandbox(ctx context.Context, sandboxID string) (string, error) {
+	key := r.formSandboxProjectKey(sandboxID)
+	projectID, err := r.client.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", nil // Not found, return empty string
+		}
+		return "", fmt.Errorf("failed to get project for sandbox %s: %w", sandboxID, err)
+	}
+	return projectID, nil
+}
+
+// GetSandboxExpiration returns the expiration time for a sandbox
+func (r *redisStore) GetSandboxExpiration(ctx context.Context, sandboxID string) (time.Time, error) {
+	expKey := r.formExpirationKey()
+
+	// Get the score (expiration time) for the sandbox
+	score, err := r.client.ZScore(ctx, expKey, sandboxID).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return time.Time{}, fmt.Errorf("sandbox %s not found", sandboxID)
+		}
+		return time.Time{}, fmt.Errorf("failed to get expiration for sandbox %s: %w", sandboxID, err)
+	}
+
+	// Convert score (Unix timestamp) to time.Time
+	return time.Unix(int64(score), 0), nil
+}
+
+// IsSandboxValid checks if a sandbox is still valid (not expired)
+func (r *redisStore) IsSandboxValid(ctx context.Context, sandboxID string) (bool, error) {
+	expKey := r.formExpirationKey()
+
+	// Get the score (expiration time) for the sandbox
+	score, err := r.client.ZScore(ctx, expKey, sandboxID).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return false, fmt.Errorf("sandbox %s not found", sandboxID)
+		}
+		return false, fmt.Errorf("failed to get expiration for sandbox %s: %w", sandboxID, err)
+	}
+
+	// Convert score (Unix timestamp) to time.Time
+	expirationTime := time.Unix(int64(score), 0)
+
+	// Check if the sandbox is still valid
+	return time.Now().Before(expirationTime), nil
 }

@@ -51,11 +51,25 @@ type Store interface {
 	// Used when a sandbox is explicitly released
 	RemoveSandboxExpiration(ctx context.Context, sandboxID string) error
 
-	// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
-	// Returns true if this is the first time this event is being processed within the TTL window,
-	// false if we've already processed an event for this sandbox recently.
-	// This helps prevent duplicate processing during event storms.
-	MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error)
+	// GetProjectSandbox returns the sandbox ID for a given project, or empty string if not found
+	GetProjectSandbox(ctx context.Context, projectID string) (string, error)
+
+	// SetProjectSandbox stores the sandbox ID for a given project
+	SetProjectSandbox(ctx context.Context, projectID, sandboxID string) error
+
+	// RemoveProjectSandbox removes the project-sandbox mapping
+	RemoveProjectSandbox(ctx context.Context, projectID string) error
+
+	// GetSandboxExpiration returns the expiration time for a sandbox
+	GetSandboxExpiration(ctx context.Context, sandboxID string) (time.Time, error)
+
+	// IsSandboxValid checks if a sandbox is still valid (not expired)
+	// Returns true if the sandbox exists and is not expired, false otherwise
+	IsSandboxValid(ctx context.Context, sandboxID string) (bool, error)
+
+	// FindProjectForSandbox finds the project ID associated with a sandbox
+	// Returns the project ID if found, empty string if not found
+	FindProjectForSandbox(ctx context.Context, sandboxID string) (string, error)
 
 	// Close cleans up resources used by the store
 	Close() error

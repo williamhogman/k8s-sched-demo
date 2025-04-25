@@ -2,7 +2,6 @@ package service
 
 import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/events"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -14,7 +13,6 @@ func ProvideSchedulerService(
 	k8sClient K8sClientInterface,
 	idempotenceStore persistence.Store,
 	logger *zap.Logger,
-	eventBroadcaster events.BroadcasterInterface,
 ) *SchedulerService {
 	return NewSchedulerService(
 		k8sClient,
@@ -24,11 +22,24 @@ func ProvideSchedulerService(
 			SandboxTTL:        cfg.Sandbox.TTL,
 		},
 		logger,
-		eventBroadcaster,
 	)
 }
 
-// Module provides the scheduler service dependency to the fx container
+// ProvideProjectService creates a project service with the given dependencies
+func ProvideProjectService(
+	schedulerService *SchedulerService,
+	idempotenceStore persistence.Store,
+	logger *zap.Logger,
+) *ProjectService {
+	return NewProjectService(
+		schedulerService,
+		idempotenceStore,
+		logger,
+	)
+}
+
+// Module provides the service dependencies to the fx container
 var Module = fx.Options(
 	fx.Provide(ProvideSchedulerService),
+	fx.Provide(ProvideProjectService),
 )

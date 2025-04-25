@@ -22,13 +22,14 @@ type ServerParams struct {
 	Lifecycle        fx.Lifecycle
 	Config           *config.Config
 	SchedulerService *service.SchedulerService
+	ProjectService   *service.ProjectService
 	Logger           *zap.Logger
 }
 
 // ProvideServer creates and registers the HTTP server with fx lifecycle
 func ProvideServer(p ServerParams) {
 	logger := p.Logger.Named("server")
-	server := NewSchedulerServer(p.SchedulerService, logger)
+	projectServer := NewProjectServer(p.ProjectService, logger)
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
@@ -36,9 +37,9 @@ func ProvideServer(p ServerParams) {
 				// Set up the HTTP routes with Connect handlers
 				mux := http.NewServeMux()
 
-				// Register the scheduler service handler
-				schedulerPath, schedulerHandler := schedulerv1connect.NewSandboxSchedulerHandler(server)
-				mux.Handle(schedulerPath, schedulerHandler)
+				// Register the project service handler
+				projectPath, projectHandler := schedulerv1connect.NewProjectServiceHandler(projectServer)
+				mux.Handle(projectPath, projectHandler)
 
 				addr := fmt.Sprintf(":%d", p.Config.Server.Port)
 				logger.Info("Starting Scheduler server with Connect API",

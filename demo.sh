@@ -16,9 +16,8 @@ NC='\033[0m' # No Color
 
 # Default configuration
 BUILD=true
-SCHEDULER_PORT=50052
-GLOBAL_PORT=50051
-EVENTS_PORT=50053
+SCHEDULER_PORT=50051
+DEMO_PORT=50053
 HEALTH_CHECK_TIMEOUT=10
 RELEASE_SANDBOX=false
 RETAIN_SANDBOX=false
@@ -34,10 +33,10 @@ SANDBOX_TTL="3m"
 VERBOSE=false
 RAW_OUTPUT=false
 CLIENT_ONLY=false
-NAMESPACE="sandbox"
 DEV_LOGGING=true
-ENABLE_EVENTS=true
 BUILD_SANDBOX=true
+MOCK_MODE=false
+NAMESPACE="sandbox"
 SANDBOX_IMAGE="mock-sandbox:latest"
 
 # Array to keep track of background processes
@@ -78,6 +77,10 @@ while [[ $# -gt 0 ]]; do
       BUILD_SANDBOX=false
       shift
       ;;
+    --mock)
+      MOCK_MODE=true
+      shift
+      ;;
     --help)
       echo "K8s Scheduler Demo"
       echo
@@ -92,6 +95,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --raw             Output raw JSON responses"
       echo "  --client-only     Run only the demo client without starting services"
       echo "  --no-build-sandbox Skip building the sandbox Docker image"
+      echo "  --mock            Enable mock Kubernetes mode (default: disabled)"
       echo "  --help            Show this help message"
       exit 0
       ;;
@@ -197,6 +201,43 @@ check_service_port() {
   return 0
 }
 
+# Check if Redis is already running and use it if available
+check_redis_running() {
+    if redis-cli -p $REDIS_PORT ping > /dev/null 2>&1; then
+        log_info "Using existing Redis instance on port $REDIS_PORT"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Start Redis if not already running
+start_redis() {
+    if check_redis_running; then
+        return 0
+    fi
+
+    log_info "Starting Redis on port $REDIS_PORT..."
+    redis-server --port $REDIS_PORT &
+    REDIS_PID=$!
+    PIDS+=($REDIS_PID)
+
+    # Wait for Redis to be ready
+    local max_attempts=10
+    local attempt=1
+    while ! redis-cli -p $REDIS_PORT ping > /dev/null 2>&1; do
+        if [ $attempt -ge $max_attempts ]; then
+            log_error "Redis failed to start after $max_attempts attempts"
+            return 1
+        fi
+        log_info "Waiting for Redis to be ready (attempt $attempt/$max_attempts)..."
+        sleep 1
+        ((attempt++))
+    done
+    log_success "Redis is ready!"
+    return 0
+}
+
 # Build the project if not skipped
 if [ "$BUILD" = true ]; then
   log_info "Building the project..."
@@ -207,11 +248,6 @@ if [ "$BUILD" = true ]; then
   else
     # Build everything for the full demo
     make build || { log_error "Build failed!"; exit 1; }
-    
-    # Build the test-events service if events are enabled
-    if [ "$ENABLE_EVENTS" = true ]; then
-      go build -o bin/test-events ./cmd/test-events || { log_error "Test events build failed!"; exit 1; }
-    fi
   fi
 else
   log_info "Skipping build step..."
@@ -246,8 +282,8 @@ fi
 
 if [ "$CLIENT_ONLY" = true ]; then
   # When running in client-only mode, just verify services are running
-  if ! nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
-    log_warning "Global scheduler service does not appear to be running on port $GLOBAL_PORT!"
+  if ! nc -z localhost $SCHEDULER_PORT >/dev/null 2>&1; then
+    log_warning "Scheduler service does not appear to be running on port $SCHEDULER_PORT!"
     log_warning "The demo might fail if the service is not available."
   fi
   
@@ -261,95 +297,41 @@ fi
 
 # If we get here, we're running the full demo with services
 
-# Check if ports are already in use
-if nc -z localhost $SCHEDULER_PORT >/dev/null 2>&1; then
-  log_error "Port $SCHEDULER_PORT is already in use!"
-  exit 1
-fi
-
-if nc -z localhost $GLOBAL_PORT >/dev/null 2>&1; then
-  log_error "Port $GLOBAL_PORT is already in use!"
-  exit 1
-fi
-
-if [ "$ENABLE_EVENTS" = true ] && nc -z localhost $EVENTS_PORT >/dev/null 2>&1; then
-  log_error "Port $EVENTS_PORT is already in use!"
-  exit 1
-fi
-
-# Check Redis and start if needed
-if [ "$USE_REDIS" = true ]; then
-  log_info "Checking Redis server..."
-  if nc -z localhost $REDIS_PORT >/dev/null 2>&1; then
-    log_success "Redis is already running on port $REDIS_PORT"
-  else
-    log_info "Starting Redis server on port $REDIS_PORT..."
-    redis-server --port $REDIS_PORT --daemonize yes
-    sleep 1
-    
-    # Check if Redis started successfully
-    if nc -z localhost $REDIS_PORT >/dev/null 2>&1; then
-      log_success "Redis started successfully"
-    else
-      log_error "Failed to start Redis. Please make sure Redis is installed and available."
-      exit 1
+# Check if ports are in use
+check_port() {
+    if lsof -i :$1 > /dev/null 2>&1; then
+        echo "Port $1 is already in use. Please free up the port and try again."
+        exit 1
     fi
-  fi
-  
-  # Verify Redis connectivity with ping
-  if redis-cli -p $REDIS_PORT ping > /dev/null 2>&1; then
-    # Only log if verbose mode is enabled
-    if [ "$VERBOSE" = true ]; then
-      log_success "Redis connectivity verified with PING"
+}
+
+check_port $SCHEDULER_PORT
+check_port $DEMO_PORT
+
+# Remove the Redis port check since we'll use existing Redis if available
+if [ "$CLIENT_ONLY" = false ]; then
+    # Start Redis if needed
+    if ! start_redis; then
+        log_error "Failed to start Redis. Exiting..."
+        exit 1
     fi
-  else
-    log_warning "Redis server is running but ping failed. Continuing anyway..."
-  fi
+
+    # Start Scheduler service
+    log_info "Starting Scheduler service..."
+    SCHEDULER_ARGS="--port $SCHEDULER_PORT --namespace $NAMESPACE"
+    if [ "$MOCK_MODE" = true ]; then
+      SCHEDULER_ARGS="$SCHEDULER_ARGS --mock"
+    fi
+    if [ "$DEV_LOGGING" = true ]; then
+      SCHEDULER_ARGS="$SCHEDULER_ARGS --dev-logging"
+    fi
+    ./bin/scheduler $SCHEDULER_ARGS &
+    SCHEDULER_PID=$!
+    PIDS+=($SCHEDULER_PID)
+
+    # Wait for Scheduler service to be ready
+    check_service_port $SCHEDULER_PORT "Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 fi
-
-# Start the event service if enabled
-if [ "$ENABLE_EVENTS" = true ]; then
-  log_info "Starting the Events service..."
-  ./bin/test-events --port=$EVENTS_PORT &
-  PIDS+=($!)
-
-  # Check if the events service is ready
-  check_service_port $EVENTS_PORT "Events service" $HEALTH_CHECK_TIMEOUT || exit 1
-fi
-
-# Start the Scheduler service
-log_info "Starting the Scheduler service..."
-
-# Construct scheduler command with Redis params if enabled
-SCHEDULER_CMD="./bin/scheduler --mock=false --port=$SCHEDULER_PORT --sandbox-ttl=$SANDBOX_TTL --namespace=$NAMESPACE --sandbox-image=$SANDBOX_IMAGE"
-if [ "$DEV_LOGGING" = true ]; then
-  SCHEDULER_CMD="$SCHEDULER_CMD --dev-logging"
-fi
-
-if [ "$USE_REDIS" = true ]; then
-  REDIS_URI="redis://:$REDIS_PASSWORD@$REDIS_ADDR/$REDIS_DB"
-  SCHEDULER_CMD="$SCHEDULER_CMD --idempotence=redis --redis-uri=$REDIS_URI --idempotence-ttl=$IDEMPOTENCE_TTL"
-fi
-
-# Add event broadcasting configuration if enabled
-if [ "$ENABLE_EVENTS" = true ]; then
-  SCHEDULER_CMD="$SCHEDULER_CMD --event-broadcast=true --event-endpoint=localhost:$EVENTS_PORT"
-fi
-
-# Execute scheduler command
-$SCHEDULER_CMD &
-PIDS+=($!)
-
-# Check if the scheduler service is ready
-check_service_port $SCHEDULER_PORT "Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
-
-# Start the Global Scheduler service
-log_info "Starting the Global Scheduler service..."
-./bin/global-scheduler --port=$GLOBAL_PORT &
-PIDS+=($!)
-
-# Check if the global scheduler service is ready
-check_service_port $GLOBAL_PORT "Global Scheduler service" $HEALTH_CHECK_TIMEOUT || exit 1
 
 # Run the demo client
 log_info "Running the demo client..."

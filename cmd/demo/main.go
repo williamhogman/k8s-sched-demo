@@ -14,14 +14,14 @@ import (
 	"connectrpc.com/connect"
 	"github.com/fatih/color"
 
-	selectorv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/global-scheduler/v1"
-	"github.com/williamhogman/k8s-sched-demo/gen/will/global-scheduler/v1/selectorv1connect"
+	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
+	"github.com/williamhogman/k8s-sched-demo/gen/will/scheduler/v1/schedulerv1connect"
 )
 
 var (
 	// Command-line flags
-	globalPort      = flag.Int("global-port", 50051, "The global scheduler port")
-	idempotenceKey  = flag.String("key", "", "Idempotence key (defaults to auto-generated)")
+	schedulerPort   = flag.Int("scheduler-port", 50051, "The scheduler port")
+	projectID       = flag.String("project-id", "", "Project ID (defaults to auto-generated)")
 	showIdempotence = flag.Bool("show-idempotence", true, "Whether to demonstrate idempotence with a second call")
 	retainSandbox   = flag.Bool("retain", false, "Whether to retain the sandbox")
 	retainCount     = flag.Int("retain-count", 3, "Number of times to retain the sandbox")
@@ -32,9 +32,9 @@ var (
 	namespace       = flag.String("namespace", "sandbox", "Kubernetes namespace to use for sandboxes")
 )
 
-// Client wrapper for the selector service
-type SelectorClient struct {
-	client selectorv1connect.ClusterSelectorClient
+// Client wrapper for the project service
+type ProjectClient struct {
+	client schedulerv1connect.ProjectServiceClient
 }
 
 // Color formatters
@@ -45,14 +45,14 @@ var (
 	warningColor = color.New(color.FgYellow).SprintFunc()
 )
 
-// Initialize the selector client
-func NewSelectorClient(port int) *SelectorClient {
+// Initialize the project client
+func NewProjectClient(port int) *ProjectClient {
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
-	client := selectorv1connect.NewClusterSelectorClient(
+	client := schedulerv1connect.NewProjectServiceClient(
 		http.DefaultClient,
 		baseURL,
 	)
-	return &SelectorClient{client: client}
+	return &ProjectClient{client: client}
 }
 
 // Log functions - simplified
@@ -88,18 +88,19 @@ func prettyPrintJSON(data interface{}) {
 	fmt.Println(string(jsonBytes))
 }
 
-// Get a sandbox from the cluster selector
-func (c *SelectorClient) GetSandbox(ctx context.Context, idempotenceKey string, metadata map[string]string) (*selectorv1.GetSandboxResponse, error) {
+// Get a sandbox for a project
+func (c *ProjectClient) GetProjectSandbox(ctx context.Context, projectID string, metadata map[string]string) (*schedulerv1.GetProjectSandboxResponse, error) {
 	if *verbose {
-		logInfo("Making GetSandbox request with key: %s", idempotenceKey)
+		logInfo("Making GetProjectSandbox request for project: %s", projectID)
 	}
 
-	req := connect.NewRequest(&selectorv1.GetSandboxRequest{
-		IdempotenceKey: idempotenceKey,
-		Metadata:       metadata,
+	req := connect.NewRequest(&schedulerv1.GetProjectSandboxRequest{
+		ProjectId:       projectID,
+		Metadata:        metadata,
+		WaitForCreation: true,
 	})
 
-	resp, err := c.client.GetSandbox(ctx, req)
+	resp, err := c.client.GetProjectSandbox(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -111,18 +112,17 @@ func (c *SelectorClient) GetSandbox(ctx context.Context, idempotenceKey string, 
 	return resp.Msg, nil
 }
 
-// Retain a sandbox to extend its expiration
-func (c *SelectorClient) RetainSandbox(ctx context.Context, sandboxID, clusterID string) (*selectorv1.RetainSandboxResponse, error) {
+// Get the status of a project's sandbox
+func (c *ProjectClient) GetProjectStatus(ctx context.Context, projectID string) (*schedulerv1.GetProjectStatusResponse, error) {
 	if *verbose {
-		logInfo("Making RetainSandbox request for sandbox: %s, cluster: %s", sandboxID, clusterID)
+		logInfo("Making GetProjectStatus request for project: %s", projectID)
 	}
 
-	req := connect.NewRequest(&selectorv1.RetainSandboxRequest{
-		SandboxId: sandboxID,
-		ClusterId: clusterID,
+	req := connect.NewRequest(&schedulerv1.GetProjectStatusRequest{
+		ProjectId: projectID,
 	})
 
-	resp, err := c.client.RetainSandbox(ctx, req)
+	resp, err := c.client.GetProjectStatus(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -134,18 +134,17 @@ func (c *SelectorClient) RetainSandbox(ctx context.Context, sandboxID, clusterID
 	return resp.Msg, nil
 }
 
-// Release a sandbox
-func (c *SelectorClient) ReleaseSandbox(ctx context.Context, sandboxID, clusterID string) (*selectorv1.ReleaseSandboxResponse, error) {
+// Release a project's sandbox
+func (c *ProjectClient) ReleaseProjectSandbox(ctx context.Context, projectID string) (*schedulerv1.ReleaseProjectSandboxResponse, error) {
 	if *verbose {
-		logInfo("Making ReleaseSandbox request for sandbox: %s, cluster: %s", sandboxID, clusterID)
+		logInfo("Making ReleaseProjectSandbox request for project: %s", projectID)
 	}
 
-	req := connect.NewRequest(&selectorv1.ReleaseSandboxRequest{
-		SandboxId: sandboxID,
-		ClusterId: clusterID,
+	req := connect.NewRequest(&schedulerv1.ReleaseProjectSandboxRequest{
+		ProjectId: projectID,
 	})
 
-	resp, err := c.client.ReleaseSandbox(ctx, req)
+	resp, err := c.client.ReleaseProjectSandbox(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +154,22 @@ func (c *SelectorClient) ReleaseSandbox(ctx context.Context, sandboxID, clusterI
 	}
 
 	return resp.Msg, nil
+}
+
+// Helper to convert status to string
+func statusToString(status schedulerv1.ProjectSandboxStatus) string {
+	switch status {
+	case schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE:
+		return "ACTIVE"
+	case schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_CREATING:
+		return "CREATING"
+	case schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_NOT_FOUND:
+		return "NOT_FOUND"
+	case schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR:
+		return "ERROR"
+	default:
+		return "UNSPECIFIED"
+	}
 }
 
 func main() {
@@ -165,9 +180,9 @@ func main() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stdout)
 
-	// Generate idempotence key if not provided
-	if *idempotenceKey == "" {
-		*idempotenceKey = fmt.Sprintf("demo-%d", time.Now().Unix())
+	// Generate project ID if not provided
+	if *projectID == "" {
+		*projectID = fmt.Sprintf("demo-project-%d", time.Now().Unix())
 	}
 
 	// Create a context that can be cancelled on interrupt
@@ -184,8 +199,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Initialize the selector client
-	client := NewSelectorClient(*globalPort)
+	// Initialize the project client
+	client := NewProjectClient(*schedulerPort)
 
 	// Metadata for the sandbox request
 	metadata := map[string]string{
@@ -193,27 +208,26 @@ func main() {
 		"owner":   "user",
 	}
 
-	// Make the first GetSandbox request
-	logInfo("Requesting sandbox with key: %s", *idempotenceKey)
-	resp, err := client.GetSandbox(ctx, *idempotenceKey, metadata)
+	// Get a sandbox for the project
+	logInfo("Requesting sandbox for project: %s", *projectID)
+	resp, err := client.GetProjectSandbox(ctx, *projectID, metadata)
 	if err != nil {
-		logError("Failed to get sandbox: %v", err)
+		logError("Failed to get project sandbox: %v", err)
 		os.Exit(1)
 	}
 
-	logSuccess("Sandbox created: %s on cluster: %s", resp.SandboxId, resp.ClusterId)
+	logSuccess("Project sandbox created: %s (Status: %s)", resp.SandboxId, statusToString(resp.Status))
 
-	// Store sandbox and cluster IDs for later use
+	// Store sandbox ID for later use
 	sandboxID := resp.SandboxId
-	clusterID := resp.ClusterId
 
 	// Demonstrate idempotence if enabled
 	if *showIdempotence {
 		time.Sleep(2 * time.Second)
 
-		secondResp, err := client.GetSandbox(ctx, *idempotenceKey, metadata)
+		secondResp, err := client.GetProjectSandbox(ctx, *projectID, metadata)
 		if err != nil {
-			logError("Failed to make second sandbox request: %v", err)
+			logError("Failed to make second project sandbox request: %v", err)
 		} else {
 			if secondResp.SandboxId == sandboxID {
 				logSuccess("Idempotence verified: Same sandbox ID (%s)", secondResp.SandboxId)
@@ -224,24 +238,32 @@ func main() {
 		}
 	}
 
+	// Check project status
+	statusResp, err := client.GetProjectStatus(ctx, *projectID)
+	if err != nil {
+		logError("Failed to get project status: %v", err)
+	} else {
+		logInfo("Project status: %s", statusToString(statusResp.Status))
+	}
+
 	// Demonstrate sandbox retention if enabled
 	if *retainSandbox {
 		logInfo("Demonstrating sandbox retention...")
 
 		for i := 1; i <= *retainCount; i++ {
-			retainResp, err := client.RetainSandbox(ctx, sandboxID, clusterID)
+			// Get project status to check sandbox
+			statusResp, err := client.GetProjectStatus(ctx, *projectID)
 			if err != nil {
-				logError("Failed to retain sandbox: %v", err)
+				logError("Failed to get project status: %v", err)
 				break
 			}
 
-			if retainResp.Success {
-				expirationTime := formatTime(retainResp.ExpirationTime)
-				logSuccess("Sandbox retained. New expiration: %s", expirationTime)
-			} else if retainResp.Error != "" {
-				logError("Failed to retain sandbox: %s", retainResp.Error)
+			if statusResp.Status != schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE {
+				logError("Sandbox is not active (status: %s)", statusToString(statusResp.Status))
 				break
 			}
+
+			logSuccess("Sandbox retained. Status: %s", statusToString(statusResp.Status))
 
 			// Wait between retain operations if not the last one
 			if i < *retainCount {
@@ -254,14 +276,22 @@ func main() {
 	if *releaseSandbox {
 		time.Sleep(3 * time.Second)
 
-		logInfo("Releasing sandbox...")
-		releaseResp, err := client.ReleaseSandbox(ctx, sandboxID, clusterID)
+		logInfo("Releasing project sandbox...")
+		releaseResp, err := client.ReleaseProjectSandbox(ctx, *projectID)
 		if err != nil {
-			logError("Failed to release sandbox: %v", err)
+			logError("Failed to release project sandbox: %v", err)
 		} else if releaseResp.Success {
-			logSuccess("Sandbox released: %s", sandboxID)
+			logSuccess("Project sandbox released: %s", releaseResp.ReleasedSandboxId)
 		} else {
-			logError("Failed to release sandbox: %s", releaseResp.Error)
+			logError("Failed to release project sandbox")
+		}
+
+		// Verify the sandbox was released
+		statusResp, err := client.GetProjectStatus(ctx, *projectID)
+		if err != nil {
+			logError("Failed to get final project status: %v", err)
+		} else {
+			logInfo("Final project status: %s", statusToString(statusResp.Status))
 		}
 	}
 

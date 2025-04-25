@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ type memoryStore struct {
 	pendingKeys       map[string]bool      // pending idempotence keys
 	releasedSandboxes map[string]bool      // recently released sandbox IDs
 	expirations       map[string]time.Time // sandbox ID -> expiration time
+	projectSandboxes  map[string]string    // project ID -> sandbox ID
+	sandboxProjects   map[string]string    // sandbox ID -> project ID (reverse mapping)
 }
 
 // newMemoryStore creates a new in-memory idempotence store
@@ -26,6 +29,8 @@ func newMemoryStore() *memoryStore {
 		pendingKeys:       make(map[string]bool),
 		releasedSandboxes: make(map[string]bool),
 		expirations:       make(map[string]time.Time),
+		projectSandboxes:  make(map[string]string),
+		sandboxProjects:   make(map[string]string),
 	}
 }
 
@@ -185,10 +190,80 @@ func (m *memoryStore) setIfNotExists(ctx context.Context, key, value string, ttl
 	return true, nil
 }
 
-// MarkPodEventProcessed records that a pod event for the given sandbox ID has been processed
-func (m *memoryStore) MarkPodEventProcessed(ctx context.Context, sandboxID string, ttl time.Duration) (bool, error) {
-	trackingKey := "pod-event:" + sandboxID
+// GetProjectSandbox returns the sandbox ID for a given project
+func (m *memoryStore) GetProjectSandbox(ctx context.Context, projectID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	// Use the existing setIfNotExists method to implement this
-	return m.setIfNotExists(ctx, trackingKey, time.Now().Format(time.RFC3339), ttl)
+	sandboxID, exists := m.projectSandboxes[projectID]
+	if !exists {
+		return "", ErrNotFound
+	}
+	return sandboxID, nil
+}
+
+// SetProjectSandbox stores the sandbox ID for a given project
+func (m *memoryStore) SetProjectSandbox(ctx context.Context, projectID, sandboxID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Set both mappings
+	m.projectSandboxes[projectID] = sandboxID
+	m.sandboxProjects[sandboxID] = projectID
+	return nil
+}
+
+// RemoveProjectSandbox removes the project-sandbox mapping
+func (m *memoryStore) RemoveProjectSandbox(ctx context.Context, projectID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Get the sandbox ID first
+	sandboxID, exists := m.projectSandboxes[projectID]
+	if !exists {
+		return nil // No mapping exists, nothing to remove
+	}
+
+	// Remove both mappings
+	delete(m.projectSandboxes, projectID)
+	delete(m.sandboxProjects, sandboxID)
+	return nil
+}
+
+// GetSandboxExpiration returns the expiration time for a sandbox
+func (m *memoryStore) GetSandboxExpiration(ctx context.Context, sandboxID string) (time.Time, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	expiration, exists := m.expirations[sandboxID]
+	if !exists {
+		return time.Time{}, fmt.Errorf("sandbox %s not found", sandboxID)
+	}
+
+	return expiration, nil
+}
+
+// IsSandboxValid checks if a sandbox is still valid (not expired)
+func (m *memoryStore) IsSandboxValid(ctx context.Context, sandboxID string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	expiration, exists := m.expirations[sandboxID]
+	if !exists {
+		return false, fmt.Errorf("sandbox %s not found", sandboxID)
+	}
+
+	return time.Now().Before(expiration), nil
+}
+
+// FindProjectForSandbox finds the project ID associated with a sandbox
+func (m *memoryStore) FindProjectForSandbox(ctx context.Context, sandboxID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	projectID, exists := m.sandboxProjects[sandboxID]
+	if !exists {
+		return "", nil // Not found, return empty string
+	}
+	return projectID, nil
 }
