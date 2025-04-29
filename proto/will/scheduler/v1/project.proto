@@ -34,36 +34,6 @@ message GetProjectSandboxResponse {
   string hostname = 3;
 }
 
-// ReleaseProjectSandboxRequest is used to release a project's sandbox
-message ReleaseProjectSandboxRequest {
-  // project_id is the unique identifier for the project
-  string project_id = 1;
-}
-
-// ReleaseProjectSandboxResponse contains the result of releasing a project's sandbox
-message ReleaseProjectSandboxResponse {
-  // success indicates if the release was successful
-  bool success = 1;
-  
-  // released_sandbox_id is the ID of the sandbox that was released
-  string released_sandbox_id = 2;
-}
-
-// GetProjectStatusRequest is used to check the status of a project's sandbox
-message GetProjectStatusRequest {
-  // project_id is the unique identifier for the project
-  string project_id = 1;
-}
-
-// GetProjectStatusResponse contains the current status of a project's sandbox
-message GetProjectStatusResponse {
-  // status indicates the current status of the project's sandbox
-  ProjectSandboxStatus status = 1;
-  
-  // sandbox_id is the ID of the active sandbox, if any
-  string sandbox_id = 2;
-}
-
 // ProjectSandboxStatus represents the current status of a project's sandbox
 enum ProjectSandboxStatus {
   // PROJECT_SANDBOX_STATUS_UNSPECIFIED is the default status
