@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -21,8 +23,8 @@ import (
 
 // Default resource settings
 const (
-	DefaultCPU    = "0.5"
-	DefaultMemory = "512Mi"
+	DefaultCPU    = "0.1"
+	DefaultMemory = "128Mi"
 )
 
 // K8sClient is a wrapper around the Kubernetes client
@@ -46,10 +48,36 @@ var _ K8sClientInterface = (*K8sClient)(nil)
 
 // NewK8sClient creates a new K8s client
 func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
-	// Get kubeconfig from default location
-	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(os.Getenv("HOME"), ".kube", "config"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %v", err)
+	var config *rest.Config
+	var err error
+	var namespace string
+
+	// Check if we're running in a cluster
+	inCluster := IsRunningInCluster()
+	if inCluster {
+		logger.Info("Detected in-cluster environment, using in-cluster configuration")
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load in-cluster config: %v", err)
+		}
+
+		// Get the namespace from the service account
+		namespace, err = GetInClusterNamespace()
+		if err != nil {
+			logger.Warn("Failed to get in-cluster namespace, using configured namespace",
+				zap.Error(err),
+				zap.String("configured_namespace", cfg.Kubernetes.Namespace))
+			namespace = cfg.Kubernetes.Namespace
+		} else {
+			logger.Info("Using in-cluster namespace", zap.String("namespace", namespace))
+		}
+	} else {
+		logger.Info("Not running in cluster, using kubeconfig file")
+		config, err = clientcmd.BuildConfigFromFlags("", filepath.Join(os.Getenv("HOME"), ".kube", "config"))
+		if err != nil {
+			return nil, fmt.Errorf("failed to load kubeconfig: %v", err)
+		}
+		namespace = cfg.Kubernetes.Namespace
 	}
 
 	// Creates the clientset
@@ -63,7 +91,7 @@ func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 
 	client := &K8sClient{
 		clientset:    clientset,
-		namespace:    cfg.Kubernetes.Namespace,
+		namespace:    namespace,
 		useGvisor:    cfg.Kubernetes.UseGvisor,
 		sandboxImage: cfg.Kubernetes.SandboxImage,
 		watchCtx:     ctx,
@@ -200,10 +228,10 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 			},
 		},
 		InitialDelaySeconds: 0,
-		PeriodSeconds:       5,
+		PeriodSeconds:       1,
 		TimeoutSeconds:      5,
 		SuccessThreshold:    1,
-		FailureThreshold:    3,
+		FailureThreshold:    5,
 	}
 
 	// Optional volume mounts could be added here
@@ -310,7 +338,9 @@ func (k *K8sClient) watchNamespacePods() {
 	k.logger.Info("Watching pods", zap.String("namespace", k.namespace))
 
 	// Create a watcher for all pods in the namespace
-	watcher, err := k.clientset.CoreV1().Pods(k.namespace).Watch(k.watchCtx, metav1.ListOptions{})
+	watcher, err := k.clientset.CoreV1().Pods(k.namespace).Watch(k.watchCtx, metav1.ListOptions{
+		LabelSelector: "managed-by=scheduler",
+	})
 	if err != nil {
 		k.logger.Error("Error creating pod watcher", zap.Error(err))
 		return
@@ -441,6 +471,11 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 		// Service doesn't exist, create it
 		_, err = k.clientset.CoreV1().Services(k.namespace).Create(ctx, service, metav1.CreateOptions{})
 		if err != nil {
+			k.logger.Error("failed to create project service",
+				zap.String("service", serviceName),
+				zap.String("projectID", projectID),
+				zap.String("sandboxID", sandboxID),
+				zap.Error(err))
 			return fmt.Errorf("failed to create project service: %v", err)
 		}
 		k.logger.Info("Created project service",
@@ -482,5 +517,204 @@ func (k *K8sClient) DeleteProjectService(ctx context.Context, projectID string) 
 
 // GetProjectServiceHostname returns the DNS hostname for a project's service
 func (k *K8sClient) GetProjectServiceHostname(projectID string) string {
-	return fmt.Sprintf("project-%s.%s.svc.cluster.local", projectID, k.namespace)
+	return fmt.Sprintf("project-%s.%s.svc", projectID, k.namespace)
+}
+
+// IsRunningInCluster returns true if the application is running inside a Kubernetes cluster
+func IsRunningInCluster() bool {
+	// Check for the existence of the service account token
+	_, err := os.Stat("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return false
+	}
+
+	// Check for the existence of the service account CA cert
+	_, err = os.Stat("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+	if err != nil {
+		return false
+	}
+
+	// Check for the existence of the service account namespace
+	_, err = os.Stat("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return false
+	}
+
+	return true
+}
+
+// GetCurrentNamespace returns the namespace the client is currently using
+func (k *K8sClient) GetCurrentNamespace() string {
+	return k.namespace
+}
+
+// GetInClusterNamespace returns the namespace of the pod when running in-cluster
+func GetInClusterNamespace() (string, error) {
+	// Read the namespace from the service account
+	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return "", fmt.Errorf("failed to read in-cluster namespace: %v", err)
+	}
+
+	// Trim any whitespace
+	namespace := strings.TrimSpace(string(data))
+	if namespace == "" {
+		return "", fmt.Errorf("in-cluster namespace is empty")
+	}
+
+	return namespace, nil
+}
+
+// IsInCluster returns true if the client is running inside a Kubernetes cluster
+func (k *K8sClient) IsInCluster() bool {
+	return IsRunningInCluster()
+}
+
+// IsSandboxReady checks if a sandbox pod is ready or at least scheduled
+func (k *K8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (bool, error) {
+	namespace := k.namespace
+
+	k.logger.Debug("Checking if sandbox is ready",
+		zap.String("pod", sandboxID),
+		zap.String("namespace", namespace))
+
+	// Get the pod
+	pod, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, sandboxID, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// Pod doesn't exist yet
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get pod %s: %v", sandboxID, err)
+	}
+
+	// Check if the pod is in a terminal state
+	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+		return false, nil
+	}
+
+	// Check if the pod is scheduled
+	if pod.Status.Phase == corev1.PodPending {
+		// Check if the pod has been assigned to a node
+		if pod.Spec.NodeName != "" {
+			// Pod is scheduled but not yet running
+			return false, nil
+		}
+		// Pod is still waiting to be scheduled
+		return false, nil
+	}
+
+	// Check if the pod is running
+	if pod.Status.Phase == corev1.PodRunning {
+		// Check if all containers are ready
+		for _, containerStatus := range pod.Status.ContainerStatuses {
+			if !containerStatus.Ready {
+				return false, nil
+			}
+		}
+		// All containers are ready
+		return true, nil
+	}
+
+	// For any other state, consider it not ready
+	return false, nil
+}
+
+// IsSandboxGone checks if a sandbox pod is gone (deleted or not found)
+func (k *K8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bool, error) {
+	namespace := k.namespace
+
+	sandboxID = strings.TrimPrefix(sandboxID, "sandbox-")
+
+	k.logger.Debug("Checking if sandbox is gone",
+		zap.String("pod", sandboxID),
+		zap.String("namespace", namespace))
+
+	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	// Get the pod
+	_, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// Pod doesn't exist, it's gone
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to get pod %s: %v", podName, err)
+	}
+
+	// Pod exists, it's not gone
+	return false, nil
+}
+
+// WaitForSandboxReady waits for a sandbox pod to be ready, with a timeout
+func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error) {
+	namespace := k.namespace
+
+	k.logger.Info("Waiting for sandbox to be ready",
+		zap.String("pod", sandboxID),
+		zap.String("namespace", namespace),
+		zap.Duration("timeout", timeout))
+
+	// Create a context with timeout
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Check first before polling
+	ready, err := k.IsSandboxReady(ctx, sandboxID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if sandbox is ready: %v", err)
+	}
+	if ready {
+		return true, nil
+	}
+
+	// Create a ticker for polling
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// Poll until the sandbox is ready or the context is done
+	for {
+		select {
+		case <-ctxWithTimeout.Done():
+			k.logger.Warn("Timeout waiting for sandbox to be ready",
+				zap.String("pod", sandboxID),
+				zap.Duration("timeout", timeout))
+			return false, fmt.Errorf("timeout waiting for sandbox to be ready: %v", ctxWithTimeout.Err())
+		case <-ticker.C:
+			// Check if the sandbox is ready
+			ready, err := k.IsSandboxReady(ctx, sandboxID)
+			if err != nil {
+				k.logger.Warn("Error checking if sandbox is ready",
+					zap.String("pod", sandboxID),
+					zap.Error(err))
+				// Continue polling
+				continue
+			}
+
+			if ready {
+				k.logger.Info("Sandbox is ready",
+					zap.String("pod", sandboxID))
+				return true, nil
+			}
+
+			// Check if the sandbox is gone
+			gone, err := k.IsSandboxGone(ctx, sandboxID)
+			if err != nil {
+				k.logger.Warn("Error checking if sandbox is gone",
+					zap.String("pod", sandboxID),
+					zap.Error(err))
+				// Continue polling
+				continue
+			}
+
+			if gone {
+				k.logger.Warn("Sandbox is gone while waiting for it to be ready",
+					zap.String("pod", sandboxID))
+				return false, fmt.Errorf("sandbox is gone while waiting for it to be ready")
+			}
+
+			// Sandbox is not ready yet, continue polling
+			k.logger.Debug("Sandbox is not ready yet, continuing to wait",
+				zap.String("pod", sandboxID))
+		}
+	}
 }

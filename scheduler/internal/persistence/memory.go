@@ -11,26 +11,32 @@ import (
 // ErrNotFound is returned when a key is not found in the store
 var ErrNotFound = errors.New("key not found")
 
-// memoryStore provides an in-memory implementation of Store
+// memoryStore implements the Store interface using in-memory maps
 type memoryStore struct {
-	mu                sync.RWMutex
-	store             map[string]string    // idempotence key -> sandbox ID
-	pendingKeys       map[string]bool      // pending idempotence keys
-	releasedSandboxes map[string]bool      // recently released sandbox IDs
-	expirations       map[string]time.Time // sandbox ID -> expiration time
-	projectSandboxes  map[string]string    // project ID -> sandbox ID
-	sandboxProjects   map[string]string    // sandbox ID -> project ID (reverse mapping)
+	mu sync.RWMutex
+	// idempotenceKey -> sandboxID mapping
+	idempotenceMap map[string]string
+	// sandboxID -> idempotenceKey mapping (reverse mapping)
+	sandboxIdempotenceMap map[string]string
+	// sandboxID -> projectID mapping
+	sandboxProjectMap map[string]string
+	// projectID -> sandboxID mapping
+	projectSandboxMap map[string]string
+	// pending idempotence keys
+	pendingKeys map[string]struct{}
+	// expiration times for sandboxes
+	expirationTimes map[string]time.Time
 }
 
-// newMemoryStore creates a new in-memory idempotence store
-func newMemoryStore() *memoryStore {
+// NewMemoryStore creates a new memory store
+func NewMemoryStore() Store {
 	return &memoryStore{
-		store:             make(map[string]string),
-		pendingKeys:       make(map[string]bool),
-		releasedSandboxes: make(map[string]bool),
-		expirations:       make(map[string]time.Time),
-		projectSandboxes:  make(map[string]string),
-		sandboxProjects:   make(map[string]string),
+		idempotenceMap:        make(map[string]string),
+		sandboxIdempotenceMap: make(map[string]string),
+		sandboxProjectMap:     make(map[string]string),
+		projectSandboxMap:     make(map[string]string),
+		pendingKeys:           make(map[string]struct{}),
+		expirationTimes:       make(map[string]time.Time),
 	}
 }
 
@@ -39,7 +45,7 @@ func (m *memoryStore) GetSandboxID(ctx context.Context, idempotenceKey string) (
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	sandboxID, exists := m.store[idempotenceKey]
+	sandboxID, exists := m.idempotenceMap[idempotenceKey]
 	if !exists {
 		return "", ErrNotFound
 	}
@@ -51,8 +57,13 @@ func (m *memoryStore) StoreSandboxID(ctx context.Context, idempotenceKey, sandbo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// For simplicity, we don't implement TTL in memory store
-	m.store[idempotenceKey] = sandboxID
+	// Store the idempotence key -> sandbox mapping
+	m.idempotenceMap[idempotenceKey] = sandboxID
+	// Store the sandbox -> idempotence key mapping (reverse mapping)
+	m.sandboxIdempotenceMap[sandboxID] = idempotenceKey
+	// Set expiration time
+	m.expirationTimes[sandboxID] = time.Now().Add(ttl)
+
 	return nil
 }
 
@@ -65,7 +76,7 @@ func (m *memoryStore) MarkPendingCreation(ctx context.Context, idempotenceKey st
 	if _, exists := m.pendingKeys[idempotenceKey]; exists {
 		return false, nil
 	}
-	m.pendingKeys[idempotenceKey] = true
+	m.pendingKeys[idempotenceKey] = struct{}{}
 	return true, nil
 }
 
@@ -74,8 +85,15 @@ func (m *memoryStore) CompletePendingCreation(ctx context.Context, idempotenceKe
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Store the sandbox ID with the idempotence key
+	m.idempotenceMap[idempotenceKey] = sandboxID
+	// Store the sandbox -> idempotence key mapping (reverse mapping)
+	m.sandboxIdempotenceMap[sandboxID] = idempotenceKey
+	// Set expiration time
+	m.expirationTimes[sandboxID] = time.Now().Add(ttl)
+	// Remove the pending key
 	delete(m.pendingKeys, idempotenceKey)
-	m.store[idempotenceKey] = sandboxID
+
 	return nil
 }
 
@@ -84,8 +102,21 @@ func (m *memoryStore) ReleaseIdempotenceKey(ctx context.Context, idempotenceKey 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.store, idempotenceKey)
+	// Get the sandbox ID
+	sandboxID, exists := m.idempotenceMap[idempotenceKey]
+	if !exists {
+		return nil // No mapping exists, nothing to remove
+	}
+
+	// Remove the idempotence key -> sandbox mapping
+	delete(m.idempotenceMap, idempotenceKey)
+	// Remove the sandbox -> idempotence key mapping
+	delete(m.sandboxIdempotenceMap, sandboxID)
+	// Remove the pending key
 	delete(m.pendingKeys, idempotenceKey)
+	// Remove the expiration time
+	delete(m.expirationTimes, sandboxID)
+
 	return nil
 }
 
@@ -94,7 +125,7 @@ func (m *memoryStore) MarkSandboxReleased(ctx context.Context, sandboxID string,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.releasedSandboxes[sandboxID] = true
+	m.expirationTimes[sandboxID] = time.Now().Add(ttl)
 	return nil
 }
 
@@ -103,7 +134,7 @@ func (m *memoryStore) IsSandboxReleased(ctx context.Context, sandboxID string) (
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	_, exists := m.releasedSandboxes[sandboxID]
+	_, exists := m.expirationTimes[sandboxID]
 	return exists, nil
 }
 
@@ -112,7 +143,7 @@ func (m *memoryStore) UnmarkSandboxReleased(ctx context.Context, sandboxID strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.releasedSandboxes, sandboxID)
+	delete(m.expirationTimes, sandboxID)
 	return nil
 }
 
@@ -121,7 +152,7 @@ func (m *memoryStore) SetSandboxExpiration(ctx context.Context, sandboxID string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.expirations[sandboxID] = expiration
+	m.expirationTimes[sandboxID] = expiration
 	return nil
 }
 
@@ -131,14 +162,14 @@ func (m *memoryStore) ExtendSandboxExpiration(ctx context.Context, sandboxID str
 	defer m.mu.Unlock()
 
 	// Get current expiration time or use current time if not set
-	currentExpiration, exists := m.expirations[sandboxID]
+	currentExpiration, exists := m.expirationTimes[sandboxID]
 	if !exists {
 		currentExpiration = time.Now()
 	}
 
 	// Calculate new expiration time
 	newExpiration := currentExpiration.Add(extension)
-	m.expirations[sandboxID] = newExpiration
+	m.expirationTimes[sandboxID] = newExpiration
 
 	return newExpiration, nil
 }
@@ -149,7 +180,7 @@ func (m *memoryStore) GetExpiredSandboxes(ctx context.Context, now time.Time, li
 	defer m.mu.RUnlock()
 
 	var result []string
-	for sandboxID, expiration := range m.expirations {
+	for sandboxID, expiration := range m.expirationTimes {
 		if expiration.Before(now) || expiration.Equal(now) {
 			result = append(result, sandboxID)
 			if len(result) >= limit {
@@ -166,7 +197,7 @@ func (m *memoryStore) RemoveSandboxExpiration(ctx context.Context, sandboxID str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.expirations, sandboxID)
+	delete(m.expirationTimes, sandboxID)
 	return nil
 }
 
@@ -181,12 +212,12 @@ func (m *memoryStore) setIfNotExists(ctx context.Context, key, value string, ttl
 	defer m.mu.Unlock()
 
 	// Check if key exists in the store
-	if _, exists := m.store[key]; exists {
+	if _, exists := m.idempotenceMap[key]; exists {
 		return false, nil
 	}
 
 	// Set the key if it doesn't exist
-	m.store[key] = value
+	m.idempotenceMap[key] = value
 	return true, nil
 }
 
@@ -195,7 +226,7 @@ func (m *memoryStore) GetProjectSandbox(ctx context.Context, projectID string) (
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	sandboxID, exists := m.projectSandboxes[projectID]
+	sandboxID, exists := m.projectSandboxMap[projectID]
 	if !exists {
 		return "", ErrNotFound
 	}
@@ -208,8 +239,8 @@ func (m *memoryStore) SetProjectSandbox(ctx context.Context, projectID, sandboxI
 	defer m.mu.Unlock()
 
 	// Set both mappings
-	m.projectSandboxes[projectID] = sandboxID
-	m.sandboxProjects[sandboxID] = projectID
+	m.projectSandboxMap[projectID] = sandboxID
+	m.sandboxProjectMap[sandboxID] = projectID
 	return nil
 }
 
@@ -219,14 +250,14 @@ func (m *memoryStore) RemoveProjectSandbox(ctx context.Context, projectID string
 	defer m.mu.Unlock()
 
 	// Get the sandbox ID first
-	sandboxID, exists := m.projectSandboxes[projectID]
+	sandboxID, exists := m.projectSandboxMap[projectID]
 	if !exists {
 		return nil // No mapping exists, nothing to remove
 	}
 
 	// Remove both mappings
-	delete(m.projectSandboxes, projectID)
-	delete(m.sandboxProjects, sandboxID)
+	delete(m.projectSandboxMap, projectID)
+	delete(m.sandboxProjectMap, sandboxID)
 	return nil
 }
 
@@ -235,7 +266,7 @@ func (m *memoryStore) GetSandboxExpiration(ctx context.Context, sandboxID string
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	expiration, exists := m.expirations[sandboxID]
+	expiration, exists := m.expirationTimes[sandboxID]
 	if !exists {
 		return time.Time{}, fmt.Errorf("sandbox %s not found", sandboxID)
 	}
@@ -248,7 +279,7 @@ func (m *memoryStore) IsSandboxValid(ctx context.Context, sandboxID string) (boo
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	expiration, exists := m.expirations[sandboxID]
+	expiration, exists := m.expirationTimes[sandboxID]
 	if !exists {
 		return false, fmt.Errorf("sandbox %s not found", sandboxID)
 	}
@@ -261,9 +292,50 @@ func (m *memoryStore) FindProjectForSandbox(ctx context.Context, sandboxID strin
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	projectID, exists := m.sandboxProjects[sandboxID]
+	projectID, exists := m.sandboxProjectMap[sandboxID]
 	if !exists {
 		return "", nil // Not found, return empty string
 	}
 	return projectID, nil
+}
+
+// FindIdempotenceKeyForSandbox finds the idempotence key associated with a sandbox
+func (m *memoryStore) FindIdempotenceKeyForSandbox(ctx context.Context, sandboxID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	idempotenceKey, exists := m.sandboxIdempotenceMap[sandboxID]
+	if !exists {
+		return "", nil // Not found, return empty string
+	}
+	return idempotenceKey, nil
+}
+
+// RemoveSandboxMapping removes all mappings for a sandbox (idempotence key and project)
+func (m *memoryStore) RemoveSandboxMapping(ctx context.Context, sandboxID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Get the idempotence key
+	idempotenceKey, exists := m.sandboxIdempotenceMap[sandboxID]
+	if exists {
+		// Remove the idempotence key -> sandbox mapping
+		delete(m.idempotenceMap, idempotenceKey)
+		// Remove the sandbox -> idempotence key mapping
+		delete(m.sandboxIdempotenceMap, sandboxID)
+	}
+
+	// Get the project ID
+	projectID, exists := m.sandboxProjectMap[sandboxID]
+	if exists {
+		// Remove the sandbox -> project mapping
+		delete(m.sandboxProjectMap, sandboxID)
+		// Remove the project -> sandbox mapping
+		delete(m.projectSandboxMap, projectID)
+	}
+
+	// Remove the expiration time
+	delete(m.expirationTimes, sandboxID)
+
+	return nil
 }

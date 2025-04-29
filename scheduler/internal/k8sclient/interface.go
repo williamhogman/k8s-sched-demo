@@ -2,6 +2,7 @@ package k8sclient
 
 import (
 	"context"
+	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
@@ -14,6 +15,9 @@ type K8sClientInterface interface {
 	GetEventChannel() <-chan types.PodEvent
 	StartWatchers()
 	StopWatchers()
+	IsSandboxReady(ctx context.Context, sandboxID string) (bool, error)
+	IsSandboxGone(ctx context.Context, sandboxID string) (bool, error)
+	WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error)
 
 	// Project service operations
 	CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error

@@ -25,6 +25,9 @@ func registerHooks(
 ) {
 	// Create HTTP server
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/", activatorSvc.HandleRequest)
 
 	server := &http.Server{

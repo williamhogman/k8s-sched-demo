@@ -10,23 +10,15 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Build the mock-sandbox binary
-RUN cd cmd/server && go build -o /build/sandbox .
+# Build the activator binary
+RUN cd cmd/sandbox && \
+    go build -o /build/app .
 
 # Final lightweight image
-FROM alpine:latest
+FROM gcr.io/distroless/static-debian12
 
-WORKDIR /app
+COPY --from=builder /build/app /app
 
-# Copy the binary from the builder stage
-COPY --from=builder /build/sandbox /app/sandbox
-
-# Install required system tools and make binary executable
-RUN apk add --no-cache ca-certificates && \
-    chmod +x /app/sandbox
-
-# Expose the server port
 EXPOSE 8000
 
-# Set the entry point
-ENTRYPOINT ["/app/sandbox"] 
+ENTRYPOINT ["/app"] 

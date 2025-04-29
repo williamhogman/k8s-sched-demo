@@ -12,20 +12,13 @@ COPY . .
 
 # Build the scheduler binary
 RUN cd scheduler/cmd/server && \
-    go build -o /build/scheduler .
+    go build -o /build/app .
 
 # Final lightweight image
-FROM alpine:latest
+FROM gcr.io/distroless/static-debian12
 
-WORKDIR /app
-
-# Copy the binary from the builder stage
-COPY --from=builder /build/scheduler /app/scheduler
-
-# Install required system tools and make binary executable
-RUN apk add --no-cache ca-certificates && \
-    chmod +x /app/scheduler
+COPY --from=builder /build/app /app
 
 EXPOSE 50051
 
-ENTRYPOINT ["/app/scheduler"] 
+ENTRYPOINT ["/app"] 

@@ -8,12 +8,6 @@ option go_package = "github.com/williamhogman/k8s-sched-demo/gen/go/will/schedul
 service ProjectService {
   // GetProjectSandbox returns the active sandbox for a project, or initiates creation of one
   rpc GetProjectSandbox(GetProjectSandboxRequest) returns (GetProjectSandboxResponse) {}
-  
-  // ReleaseProjectSandbox releases the current sandbox for a project
-  rpc ReleaseProjectSandbox(ReleaseProjectSandboxRequest) returns (ReleaseProjectSandboxResponse) {}
-  
-  // GetProjectStatus returns the current status of a project's sandbox
-  rpc GetProjectStatus(GetProjectStatusRequest) returns (GetProjectStatusResponse) {}
 }
 
 // GetProjectSandboxRequest is used to request a sandbox for a project

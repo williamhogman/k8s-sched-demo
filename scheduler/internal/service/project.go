@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -47,20 +48,25 @@ func (s *ProjectService) GetProjectSandbox(
 	// Check if project already has an active sandbox
 	sandboxID, err := s.store.GetProjectSandbox(ctx, projectID)
 	if err == nil && sandboxID != "" {
-		// Project has an active sandbox
-		hostname := s.k8sClient.GetProjectServiceHostname(sandboxID)
-		return &schedulerv1.GetProjectSandboxResponse{
-			SandboxId: sandboxID,
-			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
-			Hostname:  hostname,
-		}, nil
-	}
-
-	// No active sandbox found
-	if !waitForCreation {
-		return &schedulerv1.GetProjectSandboxResponse{
-			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_NOT_FOUND,
-		}, nil
+		// Project has a sandbox in our store, check if it's still alive in Kubernetes
+		gone, err := s.schedulerService.IsSandboxGone(ctx, sandboxID)
+		if err != nil {
+			s.logger.Error("Failed to check if sandbox is gone",
+				append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+			// Continue with sandbox creation if we can't determine if it's gone
+		} else if gone {
+			s.logger.Info("Sandbox is gone, will create a new one",
+				append(logContext, zap.String("sandboxID", sandboxID))...)
+			sandboxID = ""
+		} else {
+			// Sandbox exists, return it
+			hostname := s.k8sClient.GetProjectServiceHostname(projectID)
+			return &schedulerv1.GetProjectSandboxResponse{
+				SandboxId: sandboxID,
+				Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
+				Hostname:  hostname,
+			}, nil
+		}
 	}
 
 	// Create a new sandbox for the project
@@ -95,93 +101,27 @@ func (s *ProjectService) GetProjectSandbox(
 		// Continue anyway, the sandbox is created
 	}
 
-	return &schedulerv1.GetProjectSandboxResponse{
-		SandboxId: sandboxID,
-		Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
-		Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
-	}, nil
-}
-
-// ReleaseProjectSandbox releases the current sandbox for a project
-func (s *ProjectService) ReleaseProjectSandbox(
-	ctx context.Context,
-	projectID string,
-) (*schedulerv1.ReleaseProjectSandboxResponse, error) {
-	// Create log context
-	logContext := []zap.Field{zap.String("projectID", projectID)}
-
-	// Get the current sandbox for the project
-	sandboxID, err := s.store.GetProjectSandbox(ctx, projectID)
-	if err != nil {
-		s.logger.Error("Failed to get project sandbox",
-			append(logContext, zap.Error(err))...)
-		return &schedulerv1.ReleaseProjectSandboxResponse{
-			Success: false,
-		}, fmt.Errorf("failed to get project sandbox: %v", err)
-	}
-
-	if sandboxID == "" {
-		return &schedulerv1.ReleaseProjectSandboxResponse{
-			Success: true, // No sandbox to release is still a success
+	if waitForCreation {
+		// Wait for the sandbox to be ready
+		ready, err := s.schedulerService.WaitForSandboxReady(ctx, sandboxID, 10*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("failed to wait for sandbox to be ready: %v", err)
+		}
+		if !ready {
+			return &schedulerv1.GetProjectSandboxResponse{
+				Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
+			}, nil
+		}
+		return &schedulerv1.GetProjectSandboxResponse{
+			SandboxId: sandboxID,
+			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
+			Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
+		}, nil
+	} else {
+		return &schedulerv1.GetProjectSandboxResponse{
+			SandboxId: sandboxID,
+			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_CREATING,
+			Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
 		}, nil
 	}
-
-	// Release the sandbox
-	success, err := s.schedulerService.ReleaseSandbox(ctx, sandboxID)
-	if err != nil {
-		s.logger.Error("Failed to release sandbox",
-			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
-		return &schedulerv1.ReleaseProjectSandboxResponse{
-			Success: false,
-		}, fmt.Errorf("failed to release sandbox: %v", err)
-	}
-
-	// Remove the project-sandbox mapping
-	if err := s.store.RemoveProjectSandbox(ctx, projectID); err != nil {
-		s.logger.Error("Failed to remove project-sandbox mapping",
-			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
-		// Continue anyway, the sandbox is released
-	}
-
-	// Delete the project's headless service
-	if err := s.k8sClient.DeleteProjectService(ctx, projectID); err != nil {
-		s.logger.Error("Failed to delete project service",
-			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
-		// Continue anyway, the sandbox is released
-	}
-
-	return &schedulerv1.ReleaseProjectSandboxResponse{
-		Success:           success,
-		ReleasedSandboxId: sandboxID,
-	}, nil
-}
-
-// GetProjectStatus gets the current status of a project's sandbox
-func (s *ProjectService) GetProjectStatus(
-	ctx context.Context,
-	projectID string,
-) (*schedulerv1.GetProjectStatusResponse, error) {
-	// Create log context
-	logContext := []zap.Field{zap.String("projectID", projectID)}
-
-	// Get the current sandbox for the project
-	sandboxID, err := s.store.GetProjectSandbox(ctx, projectID)
-	if err != nil {
-		s.logger.Error("Failed to get project sandbox",
-			append(logContext, zap.Error(err))...)
-		return &schedulerv1.GetProjectStatusResponse{
-			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
-		}, fmt.Errorf("failed to get project sandbox: %v", err)
-	}
-
-	if sandboxID == "" {
-		return &schedulerv1.GetProjectStatusResponse{
-			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_NOT_FOUND,
-		}, nil
-	}
-
-	return &schedulerv1.GetProjectStatusResponse{
-		SandboxId: sandboxID,
-		Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
-	}, nil
 }

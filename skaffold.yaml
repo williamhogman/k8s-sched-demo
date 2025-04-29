@@ -1,18 +1,26 @@
 apiVersion: skaffold/v4beta12
 kind: Config
 metadata:
-  name: k-s-sched-demo
+  name: k8s-sched
 build:
   local:
     push: false
   artifacts:
     - image: scheduler
-      buildpacks:
-        builder: "gcr.io/buildpacks/builder:v1"
-        env:
-          - "BP_GO_TARGET=scheduler/cmd/server"            
+      docker:
+        dockerfile: Dockerfile.scheduler
+    - image: activator
+      docker:
+        dockerfile: Dockerfile.activator
+portForward:
+- resourceType: service
+  resourceName: activator
+  namespace: sandbox
+  port: 80
+  localPort: 8080
 manifests:
   rawYaml:
   - k8s/sandbox-namespace.yaml
   - k8s/redis-deployment.yaml
   - k8s/scheduler-deployment.yaml
+  - k8s/activator-deployment.yaml

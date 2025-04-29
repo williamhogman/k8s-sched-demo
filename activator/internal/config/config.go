@@ -18,6 +18,9 @@ type Config struct {
 
 	// Logging settings
 	Logging LoggingConfig `envconfig:"LOGGING"`
+
+	// HTTP client settings
+	HTTPClient HTTPClientConfig `envconfig:"HTTP_CLIENT"`
 }
 
 // ServerConfig contains server-specific configuration
@@ -34,6 +37,15 @@ type SchedulerConfig struct {
 // LoggingConfig contains logging configuration
 type LoggingConfig struct {
 	Development bool `envconfig:"DEV" default:"false"` // Whether to use development logger (more verbose)
+}
+
+// HTTPClientConfig contains HTTP client configuration
+type HTTPClientConfig struct {
+	Timeout        time.Duration `envconfig:"TIMEOUT" default:"30s"`
+	MaxRetries     int           `envconfig:"MAX_RETRIES" default:"3"`
+	InitialBackoff time.Duration `envconfig:"INITIAL_BACKOFF" default:"500ms"`
+	MaxBackoff     time.Duration `envconfig:"MAX_BACKOFF" default:"5s"`
+	BackoffFactor  float64       `envconfig:"BACKOFF_FACTOR" default:"2.0"`
 }
 
 // Module provides configuration to the fx container
@@ -61,5 +73,10 @@ func PrintConfig(config *Config) {
 	fmt.Printf("Scheduler Address: %s\n", config.Scheduler.Address)
 	fmt.Printf("Scheduler Timeout: %s\n", config.Scheduler.Timeout)
 	fmt.Printf("Development Mode: %t\n", config.Logging.Development)
+	fmt.Printf("HTTP Client Timeout: %s\n", config.HTTPClient.Timeout)
+	fmt.Printf("HTTP Client Max Retries: %d\n", config.HTTPClient.MaxRetries)
+	fmt.Printf("HTTP Client Initial Backoff: %s\n", config.HTTPClient.InitialBackoff)
+	fmt.Printf("HTTP Client Max Backoff: %s\n", config.HTTPClient.MaxBackoff)
+	fmt.Printf("HTTP Client Backoff Factor: %f\n", config.HTTPClient.BackoffFactor)
 	fmt.Println("------------------------")
 }

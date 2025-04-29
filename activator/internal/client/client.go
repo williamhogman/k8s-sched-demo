@@ -62,5 +62,5 @@ func (c *SchedulerClient) GetSandbox(ctx context.Context, projectID string) (str
 		return "", fmt.Errorf("sandbox not active: %s", resp.Msg.Status.String())
 	}
 
-	return resp.Msg.SandboxId, nil
+	return resp.Msg.Hostname, nil
 }

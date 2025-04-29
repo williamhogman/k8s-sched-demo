@@ -101,3 +101,39 @@ func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, podName stri
 		m.logger.Warn("Mock event channel full, dropping event")
 	}
 }
+
+// IsSandboxReady checks if a mock sandbox is ready
+func (m *MockK8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (bool, error) {
+	m.logger.Info("Mock IsSandboxReady called",
+		zap.String("sandboxID", sandboxID))
+
+	// For mock purposes, we'll consider all sandboxes ready
+	// In a real implementation, this would check the pod status
+	return true, nil
+}
+
+// IsSandboxGone checks if a mock sandbox is gone
+func (m *MockK8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bool, error) {
+	m.logger.Info("Mock IsSandboxGone called",
+		zap.String("sandboxID", sandboxID))
+
+	// For mock purposes, we'll consider all sandboxes as existing
+	// In a real implementation, this would check if the pod exists
+	return false, nil
+}
+
+// WaitForSandboxReady waits for a mock sandbox to be ready
+func (m *MockK8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error) {
+	m.logger.Info("Mock WaitForSandboxReady called",
+		zap.String("sandboxID", sandboxID),
+		zap.Duration("timeout", timeout))
+
+	// For mock purposes, we'll simulate a short delay and then return success
+	// In a real implementation, this would poll until the pod is ready or timeout
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-time.After(100 * time.Millisecond): // Simulate a short delay
+		return true, nil
+	}
+}
