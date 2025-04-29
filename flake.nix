@@ -43,7 +43,8 @@
             # Kubernetes tools
             kubectl
             skaffold
-            kubernetes-helm            
+            kubernetes-helm     
+            ko       
 
             google-cloud-sdk
             

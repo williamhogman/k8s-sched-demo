@@ -70,8 +70,8 @@ spec:
           value: "sandbox"
         - name: DEV_LOGGING
           value: "true"
-        - name: SANDBOX_IMAGE
-          value: "mock-sandbox:latest"
+        - name: SCHEDULER_SANDBOX_IMAGE
+          value: "ko.local/sandbox:latest"
         - name: IDEMPOTENCE
           value: "redis"        
 ---

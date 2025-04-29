@@ -7,13 +7,26 @@ build:
     push: false
   artifacts:
     - image: mock-sandbox
-      context: mock-sandbox
+      ko:
+        dir: mock-sandbox
+        main: ./cmd/sandbox
+        dependencies:
+          paths:
+            - mock-sandbox/**/*.go
     - image: scheduler
-      docker:
-        dockerfile: Dockerfile.scheduler
+      ko:
+        main: ./scheduler/cmd/server
+        dependencies:
+          paths:
+            - scheduler/**/*.go
+            - gen/**/*.go
     - image: activator
-      docker:
-        dockerfile: Dockerfile.activator
+      ko:
+        main: ./activator/cmd/activator
+        dependencies:
+          paths:
+            - activator/**/*.go
+            - gen/**/*.go
 portForward:
 - resourceType: service
   resourceName: activator
