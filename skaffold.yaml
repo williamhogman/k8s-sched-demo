@@ -18,9 +18,17 @@ portForward:
   namespace: sandbox
   port: 80
   localPort: 8080
+- resourceType: service
+  resourceName: envoy
+  namespace: sandbox
+  port: 80
+  localPort: 8081
+- resourceType: service
+  resourceName: envoy
+  namespace: sandbox
+  port: 9901
+  localPort: 9901
 manifests:
-  rawYaml:
-  - k8s/sandbox-namespace.yaml
-  - k8s/redis-deployment.yaml
-  - k8s/scheduler-deployment.yaml
-  - k8s/activator-deployment.yaml
+  kustomize:
+    paths:
+      - k8s/overlays/dev

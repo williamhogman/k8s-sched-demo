@@ -1,0 +1,96 @@
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                  headers:
+                  - name: "Project-Id"
+                    present_match: true
+                route:
+                  cluster: project_service
+                  retry_policy:
+                    retry_on: connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes
+                    num_retries: 2
+                    per_try_timeout: 2s
+              - match:
+                  prefix: "/"
+                direct_response:
+                  status: 404
+                  body:
+                    inline_string: "Project-Id header is required"
+          http_filters:
+          - name: envoy.filters.http.lua
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+              inline_code: |
+                function envoy_on_request(request_handle)
+                  local project_id = request_handle:headers():get("Project-Id")
+                  if project_id then
+                    local target = "proj-" .. project_id .. ".sandbox.svc"
+                    request_handle:streamInfo():dynamicMetadata():set("envoy.lb", "project_service", {
+                      target_host = target
+                    })
+                  end
+                end
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: project_service
+    connect_timeout: 0.25s
+    type: LOGICAL_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: project_service
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: placeholder
+                port_value: 8000
+    http2_protocol_options: {}
+    lb_subset_config:
+      fallback_policy: ANY_ENDPOINT
+      subset_selectors:
+      - keys:
+        - target_host
+
+  - name: activator_service
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: activator_service
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: activator
+                port_value: 80
+    http2_protocol_options: {} 
