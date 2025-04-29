@@ -149,12 +149,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 		}
 	}
 
-	// Create standard annotations
-	annotations := map[string]string{
-		"sandbox.scheduler/scheduled":          "true",
-		"sandbox.scheduler/creation-timestamp": time.Now().Format(time.RFC3339),
-		"sandbox.scheduler/pod-name":           podName,
-	}
+	annotations := map[string]string{}
 
 	// Define resource requirements (customizable in the future)
 	resourceRequirements := corev1.ResourceRequirements{
@@ -355,11 +350,8 @@ func (k *K8sClient) watchNamespacePods() {
 			return
 		default:
 			if pod, ok := event.Object.(*corev1.Pod); ok {
-				// Check if this pod is managed by our scheduler
-				if pod.Labels["managed-by"] == "scheduler" {
-					// Process the pod event to determine if we need to send a notification
-					k.processPodEvent(pod)
-				}
+				// Process the pod event
+				k.processPodEvent(pod)
 			}
 		}
 	}
@@ -369,60 +361,69 @@ func (k *K8sClient) watchNamespacePods() {
 
 // processPodEvent checks if a pod event is significant and sends it to the event channel if needed
 func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
-	var eventType types.PodEventType
-	var reason, message string
+	// Always check scheduler managed pods
+	if pod.Labels["managed-by"] != "scheduler" {
+		return
+	}
+
+	// Only process events for pods that are failed or unschedulable
 	shouldSendEvent := false
 
-	// Check the pod phase
-	switch pod.Status.Phase {
-	case corev1.PodFailed:
-		eventType = types.PodEventFailed
-		reason = "PodFailed"
-		message = "Pod entered Failed phase"
+	// Check for pods in failed state
+	if pod.Status.Phase == corev1.PodFailed {
 		shouldSendEvent = true
-	case corev1.PodSucceeded:
-		eventType = types.PodEventSucceeded
-		reason = "PodSucceeded"
-		message = "Pod completed successfully"
+	} else if pod.Status.Phase == corev1.PodSucceeded {
 		shouldSendEvent = true
 	}
 
-	// If containers are in a terminal state, check for reasons
+	// Check for unschedulable pods
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "Unschedulable" {
+			shouldSendEvent = true
+			break
+		}
+	}
+
+	// Check for container issues
 	for _, containerStatus := range pod.Status.ContainerStatuses {
-		// Check for waiting containers with issues
 		if containerStatus.State.Waiting != nil {
 			waitState := containerStatus.State.Waiting
-
 			// Consider certain waiting reasons as failure events
 			switch waitState.Reason {
 			case "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerError":
-				eventType = types.PodEventFailed
-				reason = fmt.Sprintf("ContainerWaiting:%s", waitState.Reason)
-				message = fmt.Sprintf("Container %s is waiting: %s",
-					containerStatus.Name, waitState.Message)
 				shouldSendEvent = true
+				break
 			}
 		}
 	}
 
-	// Send the event if needed
+	// Only send events for pods that need attention
 	if shouldSendEvent {
 		event := types.PodEvent{
-			PodName:   pod.Name,
-			EventType: eventType,
-			Reason:    reason,
-			Message:   message,
-			Timestamp: time.Now(),
+			PodName: pod.Name,
 		}
 
+		// Determine if the pod is already being deleted or should be deleted
+		if pod.DeletionTimestamp != nil {
+			event.EventType = types.PodAlreadyDeleted
+		} else {
+			event.EventType = types.PodToBeDeleted
+		}
+
+		// Send the event
 		select {
 		case k.eventChan <- event:
-			// Do nothing
+			// Event sent successfully
+			k.logger.Debug("Pod event sent",
+				zap.String("pod", pod.Name),
+				zap.String("eventType", string(event.EventType)))
 		default:
 			// If channel is full, log a warning but don't block
 			k.logger.Warn("Event channel full, dropping pod event",
 				zap.String("pod", pod.Name),
-				zap.String("eventType", string(eventType)))
+				zap.String("eventType", string(event.EventType)))
 		}
 	}
 }
@@ -536,11 +537,7 @@ func IsRunningInCluster() bool {
 
 	// Check for the existence of the service account namespace
 	_, err = os.Stat("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-	if err != nil {
-		return false
-	}
-
-	return true
+	return err == nil
 }
 
 // GetCurrentNamespace returns the namespace the client is currently using

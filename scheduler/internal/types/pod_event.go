@@ -1,33 +1,27 @@
 package types
 
-import "time"
-
 // PodEventType represents the type of pod event
 type PodEventType string
 
 const (
-	// PodEventFailed indicates that the pod has failed
-	PodEventFailed PodEventType = "Failed"
-	// PodEventSucceeded indicates that the pod completed successfully
-	PodEventSucceeded PodEventType = "Succeeded"
-	// PodEventTerminated indicates that the pod was terminated
-	PodEventTerminated PodEventType = "Terminated"
-	// PodEventUnschedulable indicates that the pod cannot be scheduled
-	PodEventUnschedulable PodEventType = "Unschedulable"
-	// PodEventScheduled indicates that the pod has been scheduled
-	PodEventScheduled PodEventType = "Scheduled"
+	// PodAlreadyDeleted indicates the pod has already been deleted
+	PodAlreadyDeleted PodEventType = "AlreadyDeleted"
+	// PodToBeDeleted indicates the pod should be deleted
+	PodToBeDeleted PodEventType = "ToBeDeleted"
 )
 
-// PodEvent represents a Kubernetes pod event that needs to be propagated
+// PodEvent represents a simplified Kubernetes pod event
 type PodEvent struct {
 	// PodName is the name of the pod
 	PodName string
-	// EventType is the type of the event
+	// EventType indicates if the pod is already deleted or needs to be deleted
 	EventType PodEventType
-	// Reason provides additional context about the event
-	Reason string
-	// Message provides a human-readable explanation
-	Message string
-	// Timestamp is when the event occurred
-	Timestamp time.Time
+}
+
+func (e PodEvent) AlreadyDeleted() bool {
+	return e.EventType == PodAlreadyDeleted
+}
+
+func (e PodEvent) ToBeDeleted() bool {
+	return e.EventType == PodToBeDeleted
 }

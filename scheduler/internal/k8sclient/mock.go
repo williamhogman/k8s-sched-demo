@@ -88,9 +88,6 @@ func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, podName stri
 	event := types.PodEvent{
 		PodName:   podName,
 		EventType: eventType,
-		Reason:    "MockEvent",
-		Message:   "This is a mock event",
-		Timestamp: time.Now(),
 	}
 	select {
 	case m.eventChan <- event:

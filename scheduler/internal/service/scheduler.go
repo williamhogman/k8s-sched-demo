@@ -92,23 +92,13 @@ func (s *SchedulerService) startEventProcessing() {
 
 // handlePodEvent processes pod events from the k8s client
 func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
-
 	// Extract pod name from the event
 	podName := event.PodName
-	if podName == "" {
-		s.logger.Warn("received pod event without pod name",
-			zap.String("event_reason", event.Reason),
-			zap.String("event_type", string(event.EventType)),
-		)
-		return
-	}
 
 	// Check if this is a sandbox pod
 	if !strings.HasPrefix(podName, "sandbox-") {
 		return
 	}
-
-	// Extract sandbox ID from pod name
 	sandboxID := strings.TrimPrefix(podName, "sandbox-")
 
 	// Use the new RemoveSandboxMapping function to clean up all mappings
