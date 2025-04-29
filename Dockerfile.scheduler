@@ -10,8 +10,8 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Build the activator binary
-RUN cd cmd/sandbox && \
+# Build the scheduler binary
+RUN cd scheduler/cmd/server && \
     go build -o /build/app .
 
 # Final lightweight image
@@ -19,6 +19,6 @@ FROM gcr.io/distroless/static-debian12
 
 COPY --from=builder /build/app /app
 
-EXPOSE 8000
+EXPOSE 50051
 
 ENTRYPOINT ["/app"] 

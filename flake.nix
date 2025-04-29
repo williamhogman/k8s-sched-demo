@@ -42,6 +42,7 @@
             
             # Kubernetes tools
             kubectl
+            skaffold
             kubernetes-helm
             
             # Database
@@ -52,6 +53,7 @@
             ncurses # For the tput command
             netcat  # For the nc command
             jq      # For JSON processing
+            google-cloud-sdk
             
             # Direnv support
             direnv

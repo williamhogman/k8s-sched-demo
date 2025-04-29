@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Build the activator binary
-RUN cd cmd/sandbox && \
+RUN cd activator/cmd/activator && \
     go build -o /build/app .
 
 # Final lightweight image
@@ -19,6 +19,6 @@ FROM gcr.io/distroless/static-debian12
 
 COPY --from=builder /build/app /app
 
-EXPOSE 8000
+EXPOSE 8080
 
 ENTRYPOINT ["/app"] 

@@ -71,6 +71,13 @@ type Store interface {
 	// Returns the project ID if found, empty string if not found
 	FindProjectForSandbox(ctx context.Context, sandboxID string) (string, error)
 
+	// FindIdempotenceKeyForSandbox finds the idempotence key associated with a sandbox
+	// Returns the idempotence key if found, empty string if not found
+	FindIdempotenceKeyForSandbox(ctx context.Context, sandboxID string) (string, error)
+
+	// RemoveSandboxMapping removes all mappings for a sandbox (idempotence key and project)
+	RemoveSandboxMapping(ctx context.Context, sandboxID string) error
+
 	// Close cleans up resources used by the store
 	Close() error
 }
@@ -86,11 +93,11 @@ type Config struct {
 func NewStore(cfg Config) (Store, error) {
 	switch cfg.Type {
 	case "memory":
-		return newMemoryStore(), nil
+		return NewMemoryStore(), nil
 	case "redis":
 		return newRedisStore(cfg.RedisURI)
 	default:
 		// Default to memory store if unspecified
-		return newMemoryStore(), nil
+		return NewMemoryStore(), nil
 	}
 }

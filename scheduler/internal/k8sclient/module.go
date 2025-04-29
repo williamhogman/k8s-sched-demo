@@ -4,13 +4,12 @@ import (
 	"context"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
 
 // ProvideK8sClient creates a K8s client based on the configuration
-func ProvideK8sClient(cfg *config.Config, logger *zap.Logger) (service.K8sClientInterface, error) {
+func ProvideK8sClient(cfg *config.Config, logger *zap.Logger) (K8sClientInterface, error) {
 	if cfg.Kubernetes.MockMode {
 		return NewMockK8sClient(logger), nil
 	}
@@ -19,7 +18,7 @@ func ProvideK8sClient(cfg *config.Config, logger *zap.Logger) (service.K8sClient
 }
 
 // RegisterHooks registers lifecycle hooks for the K8s client
-func RegisterHooks(lc fx.Lifecycle, client service.K8sClientInterface, logger *zap.Logger) {
+func RegisterHooks(lc fx.Lifecycle, client K8sClientInterface, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			logger.Info("Starting Kubernetes client watchers")

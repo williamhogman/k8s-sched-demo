@@ -86,6 +86,11 @@ func (r *redisStore) formSandboxProjectKey(sandboxID string) string {
 	return r.keyPrefix + "sandbox:" + sandboxID
 }
 
+// formSandboxIdempotenceKey creates a Redis key for sandbox-idempotence mapping (reverse mapping)
+func (r *redisStore) formSandboxIdempotenceKey(sandboxID string) string {
+	return r.keyPrefix + "sandbox-idempotence:" + sandboxID
+}
+
 // GetSandboxID retrieves the sandbox ID for a given idempotence key
 func (r *redisStore) GetSandboxID(ctx context.Context, idempotenceKey string) (string, error) {
 	key := r.formKey(idempotenceKey)
@@ -101,8 +106,18 @@ func (r *redisStore) GetSandboxID(ctx context.Context, idempotenceKey string) (s
 
 // StoreSandboxID stores the sandbox ID for a given idempotence key
 func (r *redisStore) StoreSandboxID(ctx context.Context, idempotenceKey, sandboxID string, ttl time.Duration) error {
+	// Use a pipeline to set both mappings in a single round-trip
+	pipe := r.client.Pipeline()
+
+	// Set the idempotence key -> sandbox mapping
 	key := r.formKey(idempotenceKey)
-	err := r.client.Set(ctx, key, sandboxID, ttl).Err()
+	pipe.Set(ctx, key, sandboxID, ttl)
+
+	// Set the sandbox -> idempotence key mapping (reverse mapping)
+	sandboxKey := r.formSandboxIdempotenceKey(sandboxID)
+	pipe.Set(ctx, sandboxKey, idempotenceKey, ttl)
+
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to store sandboxID for key %s: %w", idempotenceKey, err)
 	}
@@ -127,6 +142,10 @@ func (r *redisStore) CompletePendingCreation(ctx context.Context, idempotenceKey
 	key := r.formKey(idempotenceKey)
 	pipe.Set(ctx, key, sandboxID, ttl)
 
+	// Set the sandbox -> idempotence key mapping (reverse mapping)
+	sandboxKey := r.formSandboxIdempotenceKey(sandboxID)
+	pipe.Set(ctx, sandboxKey, idempotenceKey, ttl)
+
 	// Remove the pending key
 	pendingKey := r.formPendingKey(idempotenceKey)
 	pipe.Del(ctx, pendingKey)
@@ -141,15 +160,32 @@ func (r *redisStore) CompletePendingCreation(ctx context.Context, idempotenceKey
 
 // ReleaseIdempotenceKey removes the idempotence key
 func (r *redisStore) ReleaseIdempotenceKey(ctx context.Context, idempotenceKey string) error {
-	key := r.formKey(idempotenceKey)
-	pendingKey := r.formPendingKey(idempotenceKey)
+	// Get the sandbox ID first
+	sandboxID, err := r.GetSandboxID(ctx, idempotenceKey)
+	if err != nil {
+		if err == ErrNotFound {
+			// No mapping exists, nothing to remove
+			return nil
+		}
+		return fmt.Errorf("failed to get sandboxID for key %s: %w", idempotenceKey, err)
+	}
 
-	// Use pipeline to delete both keys in a single round-trip
+	// Use pipeline to delete all related keys in a single round-trip
 	pipe := r.client.Pipeline()
+
+	// Delete the idempotence key -> sandbox mapping
+	key := r.formKey(idempotenceKey)
 	pipe.Del(ctx, key)
+
+	// Delete the sandbox -> idempotence key mapping
+	sandboxKey := r.formSandboxIdempotenceKey(sandboxID)
+	pipe.Del(ctx, sandboxKey)
+
+	// Delete the pending key
+	pendingKey := r.formPendingKey(idempotenceKey)
 	pipe.Del(ctx, pendingKey)
 
-	_, err := pipe.Exec(ctx)
+	_, err = pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to release idempotence key %s: %w", idempotenceKey, err)
 	}
@@ -397,4 +433,68 @@ func (r *redisStore) IsSandboxValid(ctx context.Context, sandboxID string) (bool
 
 	// Check if the sandbox is still valid
 	return time.Now().Before(expirationTime), nil
+}
+
+// FindIdempotenceKeyForSandbox finds the idempotence key associated with a sandbox
+func (r *redisStore) FindIdempotenceKeyForSandbox(ctx context.Context, sandboxID string) (string, error) {
+	key := r.formSandboxIdempotenceKey(sandboxID)
+	idempotenceKey, err := r.client.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", nil // Not found, return empty string
+		}
+		return "", fmt.Errorf("failed to get idempotence key for sandbox %s: %w", sandboxID, err)
+	}
+	return idempotenceKey, nil
+}
+
+// RemoveSandboxMapping removes all mappings for a sandbox (idempotence key and project)
+func (r *redisStore) RemoveSandboxMapping(ctx context.Context, sandboxID string) error {
+	// Get the idempotence key first
+	idempotenceKey, err := r.FindIdempotenceKeyForSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("failed to get idempotence key for sandbox %s: %w", sandboxID, err)
+	}
+
+	// Get the project ID
+	projectID, err := r.FindProjectForSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("failed to get project for sandbox %s: %w", sandboxID, err)
+	}
+
+	// Use a pipeline to remove all mappings in a single round-trip
+	pipe := r.client.Pipeline()
+
+	// Remove the sandbox -> idempotence key mapping
+	sandboxIdempotenceKey := r.formSandboxIdempotenceKey(sandboxID)
+	pipe.Del(ctx, sandboxIdempotenceKey)
+
+	// Remove the idempotence key -> sandbox mapping if we found an idempotence key
+	if idempotenceKey != "" {
+		idempotenceKey := r.formKey(idempotenceKey)
+		pipe.Del(ctx, idempotenceKey)
+	}
+
+	// Remove the sandbox -> project mapping if we found a project
+	if projectID != "" {
+		sandboxProjectKey := r.formSandboxProjectKey(sandboxID)
+		pipe.Del(ctx, sandboxProjectKey)
+	}
+
+	// Remove the project -> sandbox mapping if we found a project
+	if projectID != "" {
+		projectSandboxKey := r.formProjectSandboxKey(projectID)
+		pipe.Del(ctx, projectSandboxKey)
+	}
+
+	// Remove the expiration tracking
+	expKey := r.formExpirationKey()
+	pipe.ZRem(ctx, expKey, sandboxID)
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to remove sandbox mapping for %s: %w", sandboxID, err)
+	}
+
+	return nil
 }
