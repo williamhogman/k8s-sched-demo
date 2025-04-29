@@ -212,14 +212,6 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		issues = append(issues, fmt.Sprintf("failed to store idempotence mapping: %v", err))
 	}
 
-	// Set the initial expiration time for the sandbox
-	expirationTime := time.Now().Add(s.sandboxTTL)
-	logContext = append(logContext, zap.Time("expirationTime", expirationTime))
-
-	if err := s.store.SetSandboxExpiration(ctx, podName, expirationTime); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to set expiration: %v", err))
-	}
-
 	// Add issues to log context if any occurred
 	if len(issues) > 0 {
 		logContext = append(logContext, zap.Strings("issues", issues))
@@ -311,11 +303,6 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 		}
 	}
 
-	// Remove from the expiration tracking
-	if err := s.store.RemoveSandboxExpiration(ctx, sandboxID); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to remove expiration: %v", err))
-	}
-
 	// Release the sandbox on Kubernetes
 	err = s.k8sClient.ReleaseSandbox(ctx, sandboxID)
 	if err != nil {
@@ -348,61 +335,76 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string)
 	return true, nil
 }
 
-// CleanupExpiredSandboxes finds and cleans up sandboxes that have expired
-func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context, batchSize int) (int, error) {
-	if batchSize <= 0 {
-		batchSize = 10 // Default batch size
-	}
+// CleanupExpiredSandboxes finds and cleans up sandboxes that have been running for too long
+func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, error) {
+	maxAge := s.sandboxTTL
 
-	// Get sandboxes that have expired
-	now := time.Now()
-	expiredSandboxes, err := s.store.GetExpiredSandboxes(ctx, now, batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get expired sandboxes: %v", err)
-	}
+	// Calculate the cutoff time for old pods
+	cutoffTime := time.Now().Add(-maxAge)
 
-	// Track counts for summary
-	totalCount := len(expiredSandboxes)
-	releasedCount := 0
-	skippedCount := 0
-	failedCount := 0
+	// Stats for summary
+	totalReleased := 0
+	totalFailed := 0
 	var failedIDs []string
 
-	// If there are expired sandboxes to process
-	if totalCount > 0 {
-		// Process each expired sandbox
-		for _, sandboxID := range expiredSandboxes {
-			success, err := s.ReleaseSandbox(ctx, sandboxID)
+	// Paginate through all pods older than the cutoff time
+	var continueToken string
+	for {
+		// Get the next batch of pods older than the cutoff time
+		oldPods, nextToken, err := s.k8sClient.GetPodsOlderThan(ctx, cutoffTime, continueToken)
+		if err != nil {
+			return totalReleased, fmt.Errorf("failed to get old pods: %v", err)
+		}
+
+		s.logger.Info("Processing batch of old pods",
+			zap.Int("batchSize", len(oldPods)),
+			zap.Time("cutoffTime", cutoffTime))
+
+		// Process each old pod
+		for _, podName := range oldPods {
+			success, err := s.ReleaseSandbox(ctx, podName)
 			if err != nil {
-				failedCount++
-				failedIDs = append(failedIDs, sandboxID)
+				totalFailed++
+				failedIDs = append(failedIDs, podName)
+				s.logger.Warn("Failed to release sandbox",
+					zap.String("podName", podName),
+					zap.Error(err))
 			} else if success {
-				releasedCount++
+				totalReleased++
+				s.logger.Info("Released old sandbox",
+					zap.String("podName", podName))
 			}
 		}
+
+		// If there's no continuation token, we're done
+		if nextToken == "" {
+			break
+		}
+
+		// Use the next token for the next batch
+		continueToken = nextToken
 	}
 
-	// Log a single summary line with all the stats
+	// Log a summary of the cleanup
 	logContext := []zap.Field{
-		zap.Int("batchSize", batchSize),
-		zap.Int("expiredTotal", totalCount),
-		zap.Int("released", releasedCount),
-		zap.Int("skipped", skippedCount),
-		zap.Int("failed", failedCount),
+		zap.Time("cutoffTime", cutoffTime),
+		zap.Duration("maxAge", maxAge),
+		zap.Int("totalReleased", totalReleased),
+		zap.Int("totalFailed", totalFailed),
 	}
 
 	// Only add failed IDs if there were any
-	if failedCount > 0 {
+	if totalFailed > 0 {
 		logContext = append(logContext, zap.Strings("failedIDs", failedIDs))
-		s.logger.Warn("Expired sandboxes cleanup completed with some failures", logContext...)
-	} else if totalCount > 0 {
-		s.logger.Info("Expired sandboxes cleanup completed successfully", logContext...)
+		s.logger.Warn("Old sandboxes cleanup completed with some failures", logContext...)
+	} else if totalReleased > 0 {
+		s.logger.Info("Old sandboxes cleanup completed successfully", logContext...)
 	} else {
-		// For zero expired sandboxes, log at debug level
-		s.logger.Debug("No expired sandboxes to clean up", logContext...)
+		// For zero old sandboxes, log at debug level
+		s.logger.Debug("No old sandboxes to clean up", logContext...)
 	}
 
-	return releasedCount, nil
+	return totalReleased, nil
 }
 
 // Close cleans up resources used by the service

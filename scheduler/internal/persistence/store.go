@@ -35,22 +35,6 @@ type Store interface {
 	// Used when a release operation fails and we need to try again later
 	UnmarkSandboxReleased(ctx context.Context, sandboxID string) error
 
-	// SetSandboxExpiration sets the expiration time for a sandbox
-	// The expiration time is a Unix timestamp after which the sandbox should be deleted
-	SetSandboxExpiration(ctx context.Context, sandboxID string, expiration time.Time) error
-
-	// ExtendSandboxExpiration extends the expiration time for a sandbox by the given duration
-	// Returns the new expiration time
-	ExtendSandboxExpiration(ctx context.Context, sandboxID string, extension time.Duration) (time.Time, error)
-
-	// GetExpiredSandboxes returns a list of sandbox IDs that have expired (expiration time <= now)
-	// The limit parameter specifies the maximum number of sandboxes to return
-	GetExpiredSandboxes(ctx context.Context, now time.Time, limit int) ([]string, error)
-
-	// RemoveSandboxExpiration removes the expiration tracking for a sandbox
-	// Used when a sandbox is explicitly released
-	RemoveSandboxExpiration(ctx context.Context, sandboxID string) error
-
 	// GetProjectSandbox returns the sandbox ID for a given project, or empty string if not found
 	GetProjectSandbox(ctx context.Context, projectID string) (string, error)
 
@@ -59,13 +43,6 @@ type Store interface {
 
 	// RemoveProjectSandbox removes the project-sandbox mapping
 	RemoveProjectSandbox(ctx context.Context, projectID string) error
-
-	// GetSandboxExpiration returns the expiration time for a sandbox
-	GetSandboxExpiration(ctx context.Context, sandboxID string) (time.Time, error)
-
-	// IsSandboxValid checks if a sandbox is still valid (not expired)
-	// Returns true if the sandbox exists and is not expired, false otherwise
-	IsSandboxValid(ctx context.Context, sandboxID string) (bool, error)
 
 	// FindProjectForSandbox finds the project ID associated with a sandbox
 	// Returns the project ID if found, empty string if not found

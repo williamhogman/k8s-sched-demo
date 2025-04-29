@@ -19,6 +19,11 @@ type K8sClientInterface interface {
 	IsSandboxGone(ctx context.Context, sandboxID string) (bool, error)
 	WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error)
 
+	// Get pod names older than a specific time (max 100 results per call)
+	// continueToken is used for pagination; pass empty string for first page
+	// Returns pod names and a continueToken for the next page (empty if no more results)
+	GetPodsOlderThan(ctx context.Context, olderThan time.Time, continueToken string) ([]string, string, error)
+
 	// Project service operations
 	CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error
 	DeleteProjectService(ctx context.Context, projectID string) error

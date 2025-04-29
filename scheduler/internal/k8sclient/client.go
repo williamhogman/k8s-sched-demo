@@ -715,3 +715,44 @@ func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, t
 		}
 	}
 }
+
+// GetPodsOlderThan returns a list of pod names that were created before the specified time
+// Returns pod names and a continuation token for pagination (empty if no more results)
+func (k *K8sClient) GetPodsOlderThan(ctx context.Context, olderThan time.Time, continueToken string) ([]string, string, error) {
+	// Fixed limit of 100 pods per page
+	const limit = 100
+
+	// Create options for listing pods
+	listOptions := metav1.ListOptions{
+		LabelSelector: "managed-by=scheduler",
+		Limit:         int64(limit),
+	}
+
+	// Use the continue token if provided
+	if continueToken != "" {
+		listOptions.Continue = continueToken
+	}
+
+	// Get pods in the namespace
+	pods, err := k.clientset.CoreV1().Pods(k.namespace).List(ctx, listOptions)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to list pods: %v", err)
+	}
+
+	// Filter pods older than the specified time
+	var olderPods []string
+	for _, pod := range pods.Items {
+		// Check if the pod creation time is older than the specified time
+		if pod.CreationTimestamp.Time.Before(olderThan) {
+			olderPods = append(olderPods, pod.Name)
+		}
+	}
+
+	k.logger.Debug("Found pods older than specified time",
+		zap.Time("olderThan", olderThan),
+		zap.Int("foundCount", len(olderPods)),
+		zap.Int("totalReturned", len(pods.Items)),
+		zap.String("continueToken", pods.Continue))
+
+	return olderPods, pods.Continue, nil
+}

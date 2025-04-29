@@ -12,7 +12,6 @@ import (
 type Manager struct {
 	service      *service.SchedulerService
 	intervalSecs int
-	batchSize    int
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *zap.Logger
@@ -24,7 +23,6 @@ func NewManager(service *service.SchedulerService, intervalSecs, batchSize int, 
 	return &Manager{
 		service:      service,
 		intervalSecs: intervalSecs,
-		batchSize:    batchSize,
 		ctx:          ctx,
 		cancel:       cancel,
 		logger:       logger.Named("cleanup-job"),
@@ -34,8 +32,7 @@ func NewManager(service *service.SchedulerService, intervalSecs, batchSize int, 
 // Start begins the cleanup job in a goroutine
 func (cm *Manager) Start() {
 	cm.logger.Info("Starting cleanup job",
-		zap.Int("intervalSeconds", cm.intervalSecs),
-		zap.Int("batchSize", cm.batchSize))
+		zap.Int("intervalSeconds", cm.intervalSecs))
 	go cm.runCleanupJob()
 }
 
@@ -57,7 +54,7 @@ func (cm *Manager) runCleanupJob() {
 			return
 		case <-ticker.C:
 			// Run the cleanup job
-			count, err := cm.service.CleanupExpiredSandboxes(cm.ctx, cm.batchSize)
+			count, err := cm.service.CleanupExpiredSandboxes(cm.ctx)
 			if err != nil {
 				cm.logger.Error("Error during sandbox cleanup", zap.Error(err))
 			} else if count > 0 {

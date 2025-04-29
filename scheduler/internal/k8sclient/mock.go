@@ -134,3 +134,14 @@ func (m *MockK8sClient) WaitForSandboxReady(ctx context.Context, sandboxID strin
 		return true, nil
 	}
 }
+
+// GetPodsOlderThan returns a mock list of pods older than the specified time
+func (m *MockK8sClient) GetPodsOlderThan(ctx context.Context, olderThan time.Time, continueToken string) ([]string, string, error) {
+	m.logger.Info("Mock GetPodsOlderThan called",
+		zap.Time("olderThan", olderThan),
+		zap.String("continueToken", continueToken))
+
+	// For mock purposes, we'll return an empty list with no continuation token
+	// In a real implementation, this would return actual pod names and a continuation token
+	return []string{}, "", nil
+}

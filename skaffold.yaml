@@ -6,6 +6,8 @@ build:
   local:
     push: false
   artifacts:
+    - image: mock-sandbox
+      context: mock-sandbox
     - image: scheduler
       docker:
         dockerfile: Dockerfile.scheduler
