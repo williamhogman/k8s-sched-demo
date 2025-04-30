@@ -12,8 +12,8 @@ const (
 
 // PodEvent represents a simplified Kubernetes pod event
 type PodEvent struct {
-	// PodName is the name of the pod
-	PodName string
+	// SandboxID is the ID of the sandbox
+	SandboxID SandboxID
 	// EventType indicates if the pod is already deleted or needs to be deleted
 	EventType PodEventType
 }

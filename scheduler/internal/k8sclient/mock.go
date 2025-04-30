@@ -83,15 +83,15 @@ func (m *MockK8sClient) GetProjectServiceHostname(projectID types.ProjectID) str
 }
 
 // SendMockEvent sends a mock pod event to the event channel
-func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, podName string) {
+func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, sandboxID types.SandboxID) {
 	event := types.PodEvent{
-		PodName:   podName,
+		SandboxID: sandboxID,
 		EventType: eventType,
 	}
 	select {
 	case m.eventChan <- event:
 		m.logger.Info("Mock event sent",
-			zap.String("podName", podName),
+			event.SandboxID.ZapField(),
 			zap.String("eventType", string(eventType)))
 	default:
 		m.logger.Warn("Mock event channel full, dropping event")

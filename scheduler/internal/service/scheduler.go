@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	k8sclient "github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
@@ -91,31 +90,9 @@ func (s *SchedulerService) startEventProcessing() {
 
 // handlePodEvent processes pod events from the k8s client
 func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
-	// Extract pod name from the event
-	podName := event.PodName
-
-	// Check if this is a sandbox pod
-	if !strings.HasPrefix(podName, "sandbox-") {
-		return
-	}
-	sandboxID, err := types.NewSandboxID(podName)
-	if err != nil {
-		s.logger.Error("failed to parse sandbox ID", zap.Error(err))
-		return
-	}
-
-	// Release the sandbox
-	_, err = s.ReleaseSandbox(context.Background(), sandboxID)
-	if err != nil {
-		s.logger.Error("failed to release sandbox after pod deletion event",
-			sandboxID.ZapField(),
-			zap.Error(err),
-		)
-		return
-	}
-
+	s.ReleaseSandbox(context.Background(), event.SandboxID)
 	s.logger.Info("released sandbox after pod deletion event",
-		sandboxID.ZapField(),
+		event.SandboxID.ZapField(),
 	)
 }
 
@@ -188,7 +165,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 }
 
 // ReleaseSandbox handles deleting a sandbox
-func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) {
 	errRedis := s.store.RemoveSandboxMapping(ctx, sandboxID)
 	errK8s := s.k8sClient.ReleaseSandbox(ctx, sandboxID)
 
@@ -197,8 +174,6 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.S
 		level = zap.WarnLevel
 	}
 	s.logger.Log(level, "Released sandbox", sandboxID.ZapField(), zap.NamedError("redisError", errRedis), zap.NamedError("k8sError", errK8s))
-
-	return true, nil
 }
 
 // CleanupExpiredSandboxes finds and cleans up sandboxes that have been running for too long
@@ -210,9 +185,6 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 
 	// Stats for summary
 	totalReleased := 0
-	totalFailed := 0
-	var failedIDs []string
-
 	// Paginate through all pods older than the cutoff time
 	var continueToken string
 	for {
@@ -233,18 +205,9 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 				s.logger.Error("failed to parse sandbox ID", zap.Error(err))
 				continue
 			}
-			success, err := s.ReleaseSandbox(ctx, sandboxID)
-			if err != nil {
-				totalFailed++
-				failedIDs = append(failedIDs, podName)
-				s.logger.Warn("Failed to release sandbox",
-					zap.String("podName", podName),
-					zap.Error(err))
-			} else if success {
-				totalReleased++
-				s.logger.Info("Released old sandbox",
-					zap.String("podName", podName))
-			}
+			s.ReleaseSandbox(ctx, sandboxID)
+			totalReleased++
+			s.logger.Info("Released old sandbox", zap.String("podName", podName))
 		}
 
 		// If there's no continuation token, we're done
@@ -261,14 +224,10 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 		zap.Time("cutoffTime", cutoffTime),
 		zap.Duration("maxAge", maxAge),
 		zap.Int("totalReleased", totalReleased),
-		zap.Int("totalFailed", totalFailed),
 	}
 
 	// Only add failed IDs if there were any
-	if totalFailed > 0 {
-		logContext = append(logContext, zap.Strings("failedIDs", failedIDs))
-		s.logger.Warn("Old sandboxes cleanup completed with some failures", logContext...)
-	} else if totalReleased > 0 {
+	if totalReleased > 0 {
 		s.logger.Info("Old sandboxes cleanup completed successfully", logContext...)
 	} else {
 		// For zero old sandboxes, log at debug level

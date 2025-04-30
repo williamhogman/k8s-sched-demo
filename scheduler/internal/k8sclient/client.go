@@ -339,6 +339,11 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 	if pod.Labels["managed-by"] != "scheduler" {
 		return
 	}
+	sandboxID, err := types.NewSandboxID(pod.Name)
+	if err != nil {
+		k.logger.Error("failed to parse sandbox ID", zap.Error(err))
+		return
+	}
 
 	// Only process events for pods that are failed or unschedulable
 	shouldSendEvent := false
@@ -376,7 +381,7 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 	// Only send events for pods that need attention
 	if shouldSendEvent {
 		event := types.PodEvent{
-			PodName: pod.Name,
+			SandboxID: sandboxID,
 		}
 
 		// Determine if the pod is already being deleted or should be deleted
@@ -391,12 +396,12 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 		case k.eventChan <- event:
 			// Event sent successfully
 			k.logger.Debug("Pod event sent",
-				zap.String("pod", pod.Name),
+				sandboxID.ZapField(),
 				zap.String("eventType", string(event.EventType)))
 		default:
 			// If channel is full, log a warning but don't block
 			k.logger.Warn("Event channel full, dropping pod event",
-				zap.String("pod", pod.Name),
+				sandboxID.ZapField(),
 				zap.String("eventType", string(event.EventType)))
 		}
 	}
