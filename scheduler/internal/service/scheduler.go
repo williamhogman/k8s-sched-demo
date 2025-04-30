@@ -120,9 +120,9 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 }
 
 // ScheduleSandbox handles scheduling a sandbox
-func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string) (types.SandboxID, bool, error) {
+func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string) (types.SandboxID, error) {
 	if idempotenceKey == "" {
-		return "", false, fmt.Errorf("idempotence key cannot be empty")
+		return "", fmt.Errorf("idempotence key cannot be empty")
 	}
 
 	// Create log context that we'll build up throughout the function
@@ -134,7 +134,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		// We found an existing sandbox for this idempotence key
 		logContext = append(logContext, sandboxID.ZapField(), zap.Bool("reused", true))
 		s.logger.Info("Found existing sandbox for idempotence key", logContext...)
-		return sandboxID, true, nil // Return the existing sandbox, not newly created
+		return sandboxID, nil // Return the existing sandbox, not newly created
 	} else if err != nil && err != persistence.ErrNotFound {
 		// Only log actual errors, not key not found
 		logContext = append(logContext, zap.Error(err))
@@ -162,7 +162,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 					zap.Int("attempt", i+1),
 					zap.Bool("concurrent", true))
 				s.logger.Info("Found sandbox created by concurrent request", logContext...)
-				return sandboxID, false, nil
+				return sandboxID, nil
 			}
 		}
 
@@ -177,14 +177,14 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		removeMappingErr := s.store.RemoveSandboxMapping(ctx, sandboxID)
 		logContext = append(logContext, zap.NamedError("k8sError", err), zap.NamedError("removeMappingError", removeMappingErr))
 		s.logger.Error("Failed to schedule sandbox", logContext...)
-		return "", false, fmt.Errorf("failed to schedule: %v", err)
+		return "", fmt.Errorf("failed to schedule: %v", err)
 	}
 
 	errIdempotenceStore := s.store.CompletePendingCreation(ctx, idempotenceKey, sandboxID, s.idempotenceKeyTTL)
 	logContext = append(logContext, zap.NamedError("idempotenceStoreError", errIdempotenceStore))
 	s.logger.Info("Successfully scheduled sandbox", logContext...)
 
-	return sandboxID, true, nil
+	return sandboxID, nil
 }
 
 // ReleaseSandbox handles deleting a sandbox

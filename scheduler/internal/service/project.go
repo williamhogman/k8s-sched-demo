@@ -69,21 +69,13 @@ func (s *ProjectService) GetProjectSandbox(
 	}
 
 	// Create a new sandbox for the project
-	sandboxID, success, err := s.schedulerService.ScheduleSandbox(ctx, projectID.String())
+	sandboxID, err = s.schedulerService.ScheduleSandbox(ctx, projectID.String())
 	if err != nil {
 		s.logger.Error("Failed to create sandbox for project",
 			append(logContext, zap.Error(err))...)
 		return &schedulerv1.GetProjectSandboxResponse{
 			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
 		}, fmt.Errorf("failed to create sandbox: %v", err)
-	}
-
-	if !success {
-		s.logger.Error("Failed to create sandbox for project",
-			append(logContext, zap.String("sandboxID", sandboxID.String()))...)
-		return &schedulerv1.GetProjectSandboxResponse{
-			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
-		}, fmt.Errorf("failed to create sandbox")
 	}
 
 	// Store the project-sandbox mapping
