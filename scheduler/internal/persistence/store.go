@@ -24,14 +24,14 @@ type Store interface {
 	IsSandboxReleased(ctx context.Context, sandboxID types.SandboxID) (bool, error)
 
 	// GetProjectSandbox returns the sandbox ID for a given project, or empty string if not found
-	GetProjectSandbox(ctx context.Context, projectID string) (types.SandboxID, error)
+	GetProjectSandbox(ctx context.Context, projectID types.ProjectID) (types.SandboxID, error)
 
 	// SetProjectSandbox stores the sandbox ID for a given project
-	SetProjectSandbox(ctx context.Context, projectID string, sandboxID types.SandboxID) error
+	SetProjectSandbox(ctx context.Context, projectID types.ProjectID, sandboxID types.SandboxID) error
 
 	// FindProjectForSandbox finds the project ID associated with a sandbox
 	// Returns the project ID if found, empty string if not found
-	FindProjectForSandbox(ctx context.Context, sandboxID types.SandboxID) (string, error)
+	FindProjectForSandbox(ctx context.Context, sandboxID types.SandboxID) (types.ProjectID, error)
 
 	// RemoveSandboxMapping removes all mappings for a sandbox (idempotence key and project)
 	RemoveSandboxMapping(ctx context.Context, sandboxID types.SandboxID) error

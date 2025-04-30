@@ -65,8 +65,8 @@ func (r *redisStore) formReleasedKey(sandboxID types.SandboxID) string {
 }
 
 // formProjectSandboxKey creates a Redis key for project-sandbox mapping
-func (r *redisStore) formProjectSandboxKey(projectID string) string {
-	return r.keyPrefix + "project:" + projectID
+func (r *redisStore) formProjectSandboxKey(projectID types.ProjectID) string {
+	return r.keyPrefix + "project:" + projectID.String()
 }
 
 // formSandboxProjectKey creates a Redis key for sandbox-project mapping (reverse mapping)
@@ -151,14 +151,14 @@ func (r *redisStore) RedisClient() *redis.Client {
 }
 
 // GetProjectSandbox returns the sandbox ID for a given project
-func (r *redisStore) GetProjectSandbox(ctx context.Context, projectID string) (types.SandboxID, error) {
+func (r *redisStore) GetProjectSandbox(ctx context.Context, projectID types.ProjectID) (types.SandboxID, error) {
 	key := r.formProjectSandboxKey(projectID)
 	sandboxIDStr, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return "", ErrNotFound
 		}
-		return "", fmt.Errorf("failed to get sandbox for project %s: %w", projectID, err)
+		return "", fmt.Errorf("failed to get sandbox for project %s: %w", projectID.String(), err)
 	}
 	sandboxID, err := types.NewSandboxID(sandboxIDStr)
 	if err != nil {
@@ -168,7 +168,7 @@ func (r *redisStore) GetProjectSandbox(ctx context.Context, projectID string) (t
 }
 
 // SetProjectSandbox stores the sandbox ID for a given project
-func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID string, sandboxID types.SandboxID) error {
+func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID types.ProjectID, sandboxID types.SandboxID) error {
 	// Set a reasonable TTL for the project-sandbox mapping (24 hours)
 	const projectSandboxTTL = 24 * time.Hour
 
@@ -180,7 +180,7 @@ func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID string, sa
 
 	// Set the sandbox -> project mapping (reverse mapping)
 	sandboxKey := r.formSandboxProjectKey(sandboxID)
-	pipe.Set(ctx, sandboxKey, projectID, projectSandboxTTL)
+	pipe.Set(ctx, sandboxKey, projectID.String(), projectSandboxTTL)
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
@@ -191,15 +191,21 @@ func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID string, sa
 }
 
 // FindProjectForSandbox finds the project ID associated with a sandbox
-func (r *redisStore) FindProjectForSandbox(ctx context.Context, sandboxID types.SandboxID) (string, error) {
+func (r *redisStore) FindProjectForSandbox(ctx context.Context, sandboxID types.SandboxID) (types.ProjectID, error) {
 	key := r.formSandboxProjectKey(sandboxID)
-	projectID, err := r.client.Get(ctx, key).Result()
+	projectIDStr, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return "", nil // Not found, return empty string
 		}
 		return "", fmt.Errorf("failed to get project for sandbox %s: %w", sandboxID, err)
 	}
+
+	projectID, err := types.NewProjectID(projectIDStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid project ID: %w", err)
+	}
+
 	return projectID, nil
 }
 

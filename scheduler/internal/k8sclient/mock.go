@@ -58,25 +58,25 @@ func (m *MockK8sClient) StopWatchers() {
 }
 
 // CreateOrUpdateProjectService creates or updates a mock project service
-func (m *MockK8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error {
+func (m *MockK8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID types.ProjectID, sandboxID types.SandboxID) error {
 	m.logger.Info("Mock CreateOrUpdateProjectService called",
-		zap.String("projectID", projectID),
+		projectID.ZapField(),
 		sandboxID.ZapField())
 	return nil
 }
 
 // DeleteProjectService deletes a mock project service
-func (m *MockK8sClient) DeleteProjectService(ctx context.Context, projectID string) error {
+func (m *MockK8sClient) DeleteProjectService(ctx context.Context, projectID types.ProjectID) error {
 	m.logger.Info("Mock DeleteProjectService called",
-		zap.String("projectID", projectID))
+		projectID.ZapField())
 	return nil
 }
 
 // GetProjectServiceHostname returns a mock project service hostname
-func (m *MockK8sClient) GetProjectServiceHostname(projectID string) string {
-	hostname := fmt.Sprintf("project-%s.%s.svc.cluster.local", projectID, DefaultNamespace)
+func (m *MockK8sClient) GetProjectServiceHostname(projectID types.ProjectID) string {
+	hostname := fmt.Sprintf("project-%s.%s.svc.cluster.local", projectID.String(), DefaultNamespace)
 	m.logger.Info("Mock GetProjectServiceHostname called",
-		zap.String("projectID", projectID),
+		projectID.ZapField(),
 		zap.String("hostname", hostname))
 	return hostname
 }

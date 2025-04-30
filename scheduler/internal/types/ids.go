@@ -2,7 +2,6 @@ package types
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -39,15 +38,6 @@ func NewSandboxID(id string) (SandboxID, error) {
 	}
 
 	return SandboxID(cleanID), nil
-}
-
-// MustNewSandboxID works like NewSandboxID but panics on error
-func MustNewSandboxID(id string) SandboxID {
-	sandboxID, err := NewSandboxID(id)
-	if err != nil {
-		panic(fmt.Sprintf("invalid sandbox ID: %v", err))
-	}
-	return sandboxID
 }
 
 // IsValid returns true if the sandbox ID is valid (not empty)
@@ -102,16 +92,10 @@ func NewProjectID(id string) (ProjectID, error) {
 	return ProjectID(cleanID), nil
 }
 
-// MustNewProjectID works like NewProjectID but panics on error
-func MustNewProjectID(id string) ProjectID {
-	projectID, err := NewProjectID(id)
-	if err != nil {
-		panic(fmt.Sprintf("invalid project ID: %v", err))
-	}
-	return projectID
+func NewProjectIDWithoutPrefix(id string) (ProjectID, error) {
+	return NewProjectID(ProjectPrefix + id)
 }
 
-// IsValid returns true if the project ID is valid (not empty)
 func (p ProjectID) IsValid() bool {
 	return p != ""
 }
@@ -121,25 +105,16 @@ func (p ProjectID) String() string {
 	return string(p)
 }
 
+func (p ProjectID) ZapField() zap.Field {
+	return zap.String("projectID", string(p))
+}
+
 // WithPrefix returns the project ID with the 'project-' prefix
 func (p ProjectID) WithPrefix() string {
 	if !p.IsValid() {
 		return ""
 	}
 	return ProjectPrefix + string(p)
-}
-
-// GenerateProjectID creates a new random project ID
-func GenerateProjectID() ProjectID {
-	// Use UUID for project IDs (more collision resistant than timestamps)
-	id := strings.ReplaceAll(uuid.New().String(), "-", "")
-
-	// Truncate to keep it reasonably short
-	if len(id) > 12 {
-		id = id[:12]
-	}
-
-	return ProjectID(id)
 }
 
 // encodeBase36 encodes an integer as a base36 string (0-9a-z)

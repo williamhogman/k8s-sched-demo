@@ -25,7 +25,7 @@ type K8sClientInterface interface {
 	GetPodsOlderThan(ctx context.Context, olderThan time.Time, continueToken string) ([]string, string, error)
 
 	// Project service operations
-	CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error
-	DeleteProjectService(ctx context.Context, projectID string) error
-	GetProjectServiceHostname(projectID string) string
+	CreateOrUpdateProjectService(ctx context.Context, projectID types.ProjectID, sandboxID types.SandboxID) error
+	DeleteProjectService(ctx context.Context, projectID types.ProjectID) error
+	GetProjectServiceHostname(projectID types.ProjectID) string
 }

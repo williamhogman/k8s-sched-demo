@@ -401,10 +401,9 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 }
 
 // CreateOrUpdateProjectService creates or updates a headless service for a project
-func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error {
-	serviceName := fmt.Sprintf("project-%s", projectID)
-
+func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID types.ProjectID, sandboxID types.SandboxID) error {
 	// Create the service specification
+	serviceName := projectID.WithPrefix()
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
@@ -412,10 +411,10 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 			Labels: map[string]string{
 				"app":        "project-service",
 				"managed-by": "scheduler",
-				"project-id": projectID,
+				"project-id": projectID.String(),
 			},
 			Annotations: map[string]string{
-				"sandbox.scheduler/project-id": projectID,
+				"sandbox.scheduler/project-id": projectID.String(),
 				"sandbox.scheduler/sandbox-id": sandboxID.String(),
 			},
 		},
@@ -445,15 +444,13 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 		_, err = k.clientset.CoreV1().Services(k.namespace).Create(ctx, service, metav1.CreateOptions{})
 		if err != nil {
 			k.logger.Error("failed to create project service",
-				zap.String("service", serviceName),
-				zap.String("projectID", projectID),
+				projectID.ZapField(),
 				sandboxID.ZapField(),
 				zap.Error(err))
 			return fmt.Errorf("failed to create project service: %v", err)
 		}
 		k.logger.Info("Created project service",
-			zap.String("service", serviceName),
-			zap.String("projectID", projectID),
+			projectID.ZapField(),
 			sandboxID.ZapField())
 		return nil
 	}
@@ -467,15 +464,14 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 	}
 
 	k.logger.Info("Updated project service",
-		zap.String("service", serviceName),
-		zap.String("projectID", projectID),
+		projectID.ZapField(),
 		sandboxID.ZapField())
 	return nil
 }
 
 // DeleteProjectService deletes a project's headless service
-func (k *K8sClient) DeleteProjectService(ctx context.Context, projectID string) error {
-	serviceName := fmt.Sprintf("project-%s", projectID)
+func (k *K8sClient) DeleteProjectService(ctx context.Context, projectID types.ProjectID) error {
+	serviceName := projectID.WithPrefix()
 
 	err := k.clientset.CoreV1().Services(k.namespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
 	if err != nil {
@@ -483,14 +479,13 @@ func (k *K8sClient) DeleteProjectService(ctx context.Context, projectID string) 
 	}
 
 	k.logger.Info("Deleted project service",
-		zap.String("service", serviceName),
-		zap.String("projectID", projectID))
+		projectID.ZapField())
 	return nil
 }
 
 // GetProjectServiceHostname returns the DNS hostname for a project's service
-func (k *K8sClient) GetProjectServiceHostname(projectID string) string {
-	return fmt.Sprintf("project-%s.%s.svc", projectID, k.namespace)
+func (k *K8sClient) GetProjectServiceHostname(projectID types.ProjectID) string {
+	return fmt.Sprintf("%s.%s.svc", projectID.WithPrefix(), k.namespace)
 }
 
 // IsRunningInCluster returns true if the application is running inside a Kubernetes cluster

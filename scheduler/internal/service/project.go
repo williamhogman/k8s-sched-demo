@@ -9,6 +9,7 @@ import (
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
 
 // ProjectService implements the project-level sandbox management
@@ -37,12 +38,11 @@ func NewProjectService(
 // GetProjectSandbox gets or creates a sandbox for a project
 func (s *ProjectService) GetProjectSandbox(
 	ctx context.Context,
-	projectID string,
-	metadata map[string]string,
+	projectID types.ProjectID,
 	waitForCreation bool,
 ) (*schedulerv1.GetProjectSandboxResponse, error) {
 	// Create log context
-	logContext := []zap.Field{zap.String("projectID", projectID)}
+	logContext := []zap.Field{projectID.ZapField()}
 
 	// Check if project already has an active sandbox
 	sandboxID, err := s.store.GetProjectSandbox(ctx, projectID)
@@ -69,7 +69,7 @@ func (s *ProjectService) GetProjectSandbox(
 	}
 
 	// Create a new sandbox for the project
-	sandboxID, success, err := s.schedulerService.ScheduleSandbox(ctx, projectID)
+	sandboxID, success, err := s.schedulerService.ScheduleSandbox(ctx, projectID.String())
 	if err != nil {
 		s.logger.Error("Failed to create sandbox for project",
 			append(logContext, zap.Error(err))...)
