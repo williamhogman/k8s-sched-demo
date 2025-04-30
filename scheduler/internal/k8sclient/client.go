@@ -131,10 +131,9 @@ func (k *K8sClient) GetEventChannel() <-chan types.PodEvent {
 }
 
 // ScheduleSandbox creates a pod for the sandbox
-func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error) {
-	// Use the client's namespace
+func (k *K8sClient) ScheduleSandbox(ctx context.Context) (types.SandboxID, error) {
 	namespace := k.namespace
-
+	sandboxID := types.GenerateSandboxID()
 	// Create standard labels
 	labels := map[string]string{
 		"app":        "sandbox",
@@ -281,6 +280,9 @@ func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxI
 	// Delete the pod
 	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, sandboxID.WithPrefix(), deleteOptions)
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to delete pod %s: %v", sandboxID, err)
 	}
 

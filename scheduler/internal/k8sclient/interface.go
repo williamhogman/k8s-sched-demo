@@ -10,7 +10,7 @@ import (
 // K8sClientInterface defines the interface for Kubernetes operations
 type K8sClientInterface interface {
 	// Sandbox operations
-	ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error)
+	ScheduleSandbox(ctx context.Context) (types.SandboxID, error)
 	ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) error
 	GetEventChannel() <-chan types.PodEvent
 	StartWatchers()

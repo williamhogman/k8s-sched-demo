@@ -29,7 +29,8 @@ func NewMockK8sClient(logger *zap.Logger) *MockK8sClient {
 }
 
 // ScheduleSandbox creates a mock sandbox pod
-func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error) {
+func (m *MockK8sClient) ScheduleSandbox(ctx context.Context) (types.SandboxID, error) {
+	sandboxID := types.GenerateSandboxID()
 	m.logger.Info("Mock ScheduleSandbox called", sandboxID.ZapField())
 	return sandboxID, nil
 }

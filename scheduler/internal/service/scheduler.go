@@ -170,38 +170,19 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		s.logger.Info("Timed out waiting for concurrent creation, proceeding with own creation", logContext...)
 	}
 
-	// Generate a unique pod name
-	sandboxID = types.GenerateSandboxID()
-	logContext = append(logContext, sandboxID.ZapField())
-
 	// Schedule the sandbox on Kubernetes
-	_, err = s.k8sClient.ScheduleSandbox(ctx, sandboxID)
+	sandboxID, err = s.k8sClient.ScheduleSandbox(ctx)
+	logContext = append(logContext, sandboxID.ZapField())
 	if err != nil {
-		logContext = append(logContext, zap.Error(err))
+		removeMappingErr := s.store.RemoveSandboxMapping(ctx, sandboxID)
+		logContext = append(logContext, zap.NamedError("k8sError", err), zap.NamedError("removeMappingError", removeMappingErr))
 		s.logger.Error("Failed to schedule sandbox", logContext...)
-
-		err := s.store.RemoveSandboxMapping(ctx, sandboxID)
-		if err != nil {
-			s.logger.Warn("Clean up failed", zap.Error(err))
-		}
 		return "", false, fmt.Errorf("failed to schedule: %v", err)
 	}
 
-	// Keep track of any non-fatal issues during the completion process
-	var issues []string
-
-	// Store the mapping from idempotence key to sandbox ID and complete the pending operation
-	if err := s.store.CompletePendingCreation(ctx, idempotenceKey, sandboxID, s.idempotenceKeyTTL); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to store idempotence mapping: %v", err))
-	}
-
-	// Add issues to log context if any occurred
-	if len(issues) > 0 {
-		logContext = append(logContext, zap.Strings("issues", issues))
-		s.logger.Warn("Created sandbox with non-fatal issues", logContext...)
-	} else {
-		s.logger.Info("Successfully scheduled sandbox", logContext...)
-	}
+	errIdempotenceStore := s.store.CompletePendingCreation(ctx, idempotenceKey, sandboxID, s.idempotenceKeyTTL)
+	logContext = append(logContext, zap.NamedError("idempotenceStoreError", errIdempotenceStore))
+	s.logger.Info("Successfully scheduled sandbox", logContext...)
 
 	return sandboxID, true, nil
 }

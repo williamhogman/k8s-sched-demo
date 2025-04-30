@@ -59,6 +59,9 @@ func (s SandboxID) WithPrefix() string {
 }
 
 func (s SandboxID) ZapField() zap.Field {
+	if !s.IsValid() {
+		return zap.Skip()
+	}
 	return zap.String("sandboxID", string(s))
 }
 
@@ -106,6 +109,9 @@ func (p ProjectID) String() string {
 }
 
 func (p ProjectID) ZapField() zap.Field {
+	if !p.IsValid() {
+		return zap.Skip()
+	}
 	return zap.String("projectID", string(p))
 }
 
