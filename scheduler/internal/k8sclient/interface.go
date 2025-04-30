@@ -10,14 +10,14 @@ import (
 // K8sClientInterface defines the interface for Kubernetes operations
 type K8sClientInterface interface {
 	// Sandbox operations
-	ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error)
-	ReleaseSandbox(ctx context.Context, sandboxID string) error
+	ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error)
+	ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) error
 	GetEventChannel() <-chan types.PodEvent
 	StartWatchers()
 	StopWatchers()
-	IsSandboxReady(ctx context.Context, sandboxID string) (bool, error)
-	IsSandboxGone(ctx context.Context, sandboxID string) (bool, error)
-	WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error)
+	IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error)
+	IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error)
+	WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error)
 
 	// Get pod names older than a specific time (max 100 results per call)
 	// continueToken is used for pagination; pass empty string for first page
@@ -25,7 +25,7 @@ type K8sClientInterface interface {
 	GetPodsOlderThan(ctx context.Context, olderThan time.Time, continueToken string) ([]string, string, error)
 
 	// Project service operations
-	CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error
+	CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error
 	DeleteProjectService(ctx context.Context, projectID string) error
 	GetProjectServiceHostname(projectID string) string
 }

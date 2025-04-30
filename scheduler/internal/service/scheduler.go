@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	k8sclient "github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
@@ -99,43 +98,29 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 	if !strings.HasPrefix(podName, "sandbox-") {
 		return
 	}
-	sandboxID := strings.TrimPrefix(podName, "sandbox-")
-
-	// Use the new RemoveSandboxMapping function to clean up all mappings
-	if err := s.store.RemoveSandboxMapping(context.Background(), sandboxID); err != nil {
-		s.logger.Error("failed to remove sandbox mappings",
-			zap.String("sandbox_id", sandboxID),
-			zap.Error(err),
-		)
-	} else {
-		s.logger.Info("removed all sandbox mappings",
-			zap.String("sandbox_id", sandboxID),
-		)
+	sandboxID, err := types.NewSandboxID(podName)
+	if err != nil {
+		s.logger.Error("failed to parse sandbox ID", zap.Error(err))
+		return
 	}
 
 	// Release the sandbox
-	_, err := s.ReleaseSandbox(context.Background(), podName)
+	_, err = s.ReleaseSandbox(context.Background(), sandboxID)
 	if err != nil {
 		s.logger.Error("failed to release sandbox after pod deletion event",
-			zap.String("sandbox_id", sandboxID),
+			sandboxID.ZapField(),
 			zap.Error(err),
 		)
 		return
 	}
 
 	s.logger.Info("released sandbox after pod deletion event",
-		zap.String("sandbox_id", sandboxID),
+		sandboxID.ZapField(),
 	)
 }
 
-// findProjectForSandbox finds the project ID associated with a sandbox
-func (s *SchedulerService) findProjectForSandbox(ctx context.Context, sandboxID string) (string, error) {
-	// Use the store to find the project ID
-	return s.store.FindProjectForSandbox(ctx, sandboxID)
-}
-
 // ScheduleSandbox handles scheduling a sandbox
-func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string, metadata map[string]string) (string, bool, error) {
+func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string) (types.SandboxID, bool, error) {
 	if idempotenceKey == "" {
 		return "", false, fmt.Errorf("idempotence key cannot be empty")
 	}
@@ -145,9 +130,9 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 
 	// Check if we already have a sandbox for this idempotence key
 	sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
-	if err == nil && sandboxID != "" {
+	if err == nil {
 		// We found an existing sandbox for this idempotence key
-		logContext = append(logContext, zap.String("sandboxID", sandboxID), zap.Bool("reused", true))
+		logContext = append(logContext, sandboxID.ZapField(), zap.Bool("reused", true))
 		s.logger.Info("Found existing sandbox for idempotence key", logContext...)
 		return sandboxID, true, nil // Return the existing sandbox, not newly created
 	} else if err != nil && err != persistence.ErrNotFound {
@@ -173,7 +158,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 			sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
 			if err == nil && sandboxID != "" {
 				logContext = append(logContext,
-					zap.String("sandboxID", sandboxID),
+					sandboxID.ZapField(),
 					zap.Int("attempt", i+1),
 					zap.Bool("concurrent", true))
 				s.logger.Info("Found sandbox created by concurrent request", logContext...)
@@ -186,21 +171,19 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	}
 
 	// Generate a unique pod name
-	podName := generatePodName()
-	logContext = append(logContext, zap.String("podName", podName))
+	sandboxID = types.GenerateSandboxID()
+	logContext = append(logContext, sandboxID.ZapField())
 
 	// Schedule the sandbox on Kubernetes
-	podName, err = s.k8sClient.ScheduleSandbox(ctx, podName, metadata)
+	_, err = s.k8sClient.ScheduleSandbox(ctx, sandboxID)
 	if err != nil {
 		logContext = append(logContext, zap.Error(err))
 		s.logger.Error("Failed to schedule sandbox", logContext...)
 
-		// Clean up the pending marker since creation failed
-		if cleanupErr := s.store.ReleaseIdempotenceKey(ctx, idempotenceKey); cleanupErr != nil {
-			s.logger.Warn("Failed to clean up pending marker",
-				append(logContext, zap.Error(cleanupErr))...)
+		err := s.store.RemoveSandboxMapping(ctx, sandboxID)
+		if err != nil {
+			s.logger.Warn("Clean up failed", zap.Error(err))
 		}
-
 		return "", false, fmt.Errorf("failed to schedule: %v", err)
 	}
 
@@ -208,7 +191,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	var issues []string
 
 	// Store the mapping from idempotence key to sandbox ID and complete the pending operation
-	if err := s.store.CompletePendingCreation(ctx, idempotenceKey, podName, s.idempotenceKeyTTL); err != nil {
+	if err := s.store.CompletePendingCreation(ctx, idempotenceKey, sandboxID, s.idempotenceKeyTTL); err != nil {
 		issues = append(issues, fmt.Sprintf("failed to store idempotence mapping: %v", err))
 	}
 
@@ -220,117 +203,19 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 		s.logger.Info("Successfully scheduled sandbox", logContext...)
 	}
 
-	return podName, true, nil
-}
-
-// generatePodName creates a pod name with a standard prefix and a random base36 encoded number
-// that is valid for Kubernetes naming requirements
-func generatePodName() string {
-	// Simple prefix + random number approach
-	prefix := "sandbox"
-
-	// Generate a random number
-	randomNum := time.Now().UnixNano() + int64(uuid.New()[0])
-
-	// Encode the random number in base36
-	id := encodeBase36(randomNum)
-
-	// Truncate to keep the name reasonably short
-	if len(id) > 20 {
-		id = id[:20]
-	}
-
-	return fmt.Sprintf("%s-%s", prefix, id)
-}
-
-// encodeBase36 encodes an integer as a base36 string (0-9a-z)
-func encodeBase36(n int64) string {
-	const charset = "0123456789abcdefghijklmnopqrstuvwxyz"
-	if n == 0 {
-		return "0"
-	}
-
-	var result strings.Builder
-	for n > 0 {
-		result.WriteByte(charset[n%36])
-		n /= 36
-	}
-
-	// Reverse the string
-	runes := []rune(result.String())
-	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-		runes[i], runes[j] = runes[j], runes[i]
-	}
-
-	return string(runes)
+	return sandboxID, true, nil
 }
 
 // ReleaseSandbox handles deleting a sandbox
-func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID string) (bool, error) {
-	if sandboxID == "" {
-		return false, fmt.Errorf("sandbox ID cannot be empty")
+func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+	errRedis := s.store.RemoveSandboxMapping(ctx, sandboxID)
+	errK8s := s.k8sClient.ReleaseSandbox(ctx, sandboxID)
+
+	level := zap.InfoLevel
+	if errRedis != nil || errK8s != nil {
+		level = zap.WarnLevel
 	}
-
-	// Create log context with sandbox ID
-	logContext := []zap.Field{zap.String("sandboxID", sandboxID)}
-
-	// Keep track of any non-fatal issues
-	var issues []string
-
-	// Find the idempotence key associated with this sandbox
-	idempotenceKey, err := s.store.FindIdempotenceKeyForSandbox(ctx, sandboxID)
-	if err != nil {
-		issues = append(issues, fmt.Sprintf("failed to find idempotence key for sandbox: %v", err))
-	} else if idempotenceKey != "" {
-		// Release the idempotence key
-		if err := s.store.ReleaseIdempotenceKey(ctx, idempotenceKey); err != nil {
-			issues = append(issues, fmt.Sprintf("failed to release idempotence key: %v", err))
-		}
-	}
-
-	// Find and remove any project-sandbox mapping
-	projectID, err := s.findProjectForSandbox(ctx, sandboxID)
-	if err != nil {
-		issues = append(issues, fmt.Sprintf("failed to find project for sandbox: %v", err))
-	} else if projectID != "" {
-		if err := s.store.RemoveProjectSandbox(ctx, projectID); err != nil {
-			issues = append(issues, fmt.Sprintf("failed to remove project-sandbox mapping: %v", err))
-		} else {
-			s.logger.Info("removed project-sandbox mapping",
-				zap.String("sandbox_id", sandboxID),
-				zap.String("project_id", projectID),
-			)
-		}
-	}
-
-	// Release the sandbox on Kubernetes
-	err = s.k8sClient.ReleaseSandbox(ctx, sandboxID)
-	if err != nil {
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Error("Failed to release sandbox in Kubernetes", logContext...)
-		return false, fmt.Errorf("failed to release: %v", err)
-	}
-
-	// Mark the sandbox as released to avoid duplicate operations
-	if err := s.store.MarkSandboxReleased(ctx, sandboxID, 5*time.Minute); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to mark as released: %v", err))
-	}
-
-	// Use the new RemoveSandboxMapping function to clean up all mappings
-	if err := s.store.RemoveSandboxMapping(ctx, sandboxID); err != nil {
-		issues = append(issues, fmt.Sprintf("failed to remove sandbox mappings: %v", err))
-	} else {
-		s.logger.Info("removed all sandbox mappings",
-			zap.String("sandbox_id", sandboxID),
-		)
-	}
-
-	if len(issues) > 0 {
-		logContext = append(logContext, zap.Strings("issues", issues))
-		s.logger.Warn("Released sandbox with non-fatal issues", logContext...)
-	} else {
-		s.logger.Info("Successfully released sandbox", logContext...)
-	}
+	s.logger.Log(level, "Released sandbox", sandboxID.ZapField(), zap.NamedError("redisError", errRedis), zap.NamedError("k8sError", errK8s))
 
 	return true, nil
 }
@@ -362,7 +247,12 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 
 		// Process each old pod
 		for _, podName := range oldPods {
-			success, err := s.ReleaseSandbox(ctx, podName)
+			sandboxID, err := types.NewSandboxID(podName)
+			if err != nil {
+				s.logger.Error("failed to parse sandbox ID", zap.Error(err))
+				continue
+			}
+			success, err := s.ReleaseSandbox(ctx, sandboxID)
 			if err != nil {
 				totalFailed++
 				failedIDs = append(failedIDs, podName)
@@ -407,47 +297,18 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 	return totalReleased, nil
 }
 
-// Close cleans up resources used by the service
 func (s *SchedulerService) Close() error {
-	// Cancel the event processing context
 	s.eventCancel()
-
-	var errors []error
-
-	// Close the store
-	if s.store != nil {
-		if err := s.store.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("errors while closing: %v", errors)
-	}
-
 	return nil
 }
 
 // IsSandboxReady checks if a sandbox is ready according to Kubernetes
-func (s *SchedulerService) IsSandboxReady(ctx context.Context, sandboxID string) (bool, error) {
+func (s *SchedulerService) IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	if sandboxID == "" {
 		return false, fmt.Errorf("sandbox ID cannot be empty")
 	}
-
 	// Create log context with sandbox ID
-	logContext := []zap.Field{zap.String("sandboxID", sandboxID)}
-
-	// Check if the sandbox exists in our store
-	_, err := s.store.GetSandboxID(ctx, sandboxID)
-	if err != nil {
-		if err == persistence.ErrNotFound {
-			s.logger.Debug("Sandbox not found in store", logContext...)
-			return false, nil
-		}
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Warn("Error checking sandbox in store", logContext...)
-		// Continue anyway, we'll check with Kubernetes
-	}
+	logContext := []zap.Field{sandboxID.ZapField()}
 
 	// Check with Kubernetes if the sandbox is ready
 	ready, err := s.k8sClient.IsSandboxReady(ctx, sandboxID)
@@ -456,24 +317,13 @@ func (s *SchedulerService) IsSandboxReady(ctx context.Context, sandboxID string)
 		s.logger.Error("Error checking if sandbox is ready in Kubernetes", logContext...)
 		return false, fmt.Errorf("failed to check if sandbox is ready: %v", err)
 	}
-
-	if ready {
-		s.logger.Info("Sandbox is ready", logContext...)
-	} else {
-		s.logger.Debug("Sandbox is not ready yet", logContext...)
-	}
-
 	return ready, nil
 }
 
 // IsSandboxGone checks if a sandbox is gone according to Kubernetes
-func (s *SchedulerService) IsSandboxGone(ctx context.Context, sandboxID string) (bool, error) {
-	if sandboxID == "" {
-		return false, fmt.Errorf("sandbox ID cannot be empty")
-	}
-
+func (s *SchedulerService) IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	// Create log context with sandbox ID
-	logContext := []zap.Field{zap.String("sandboxID", sandboxID)}
+	logContext := []zap.Field{sandboxID.ZapField()}
 
 	released, err := s.store.IsSandboxReleased(ctx, sandboxID)
 	if err != nil {
@@ -494,31 +344,13 @@ func (s *SchedulerService) IsSandboxGone(ctx context.Context, sandboxID string) 
 }
 
 // WaitForSandboxReady waits for a sandbox to be ready according to Kubernetes
-func (s *SchedulerService) WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error) {
-	if sandboxID == "" {
-		return false, fmt.Errorf("sandbox ID cannot be empty")
-	}
-
-	// Create log context with sandbox ID
-	logContext := []zap.Field{
-		zap.String("sandboxID", sandboxID),
-		zap.Duration("timeout", timeout),
-	}
-	s.logger.Info("Waiting for sandbox to be ready", logContext...)
-
-	// Wait for the sandbox to be ready in Kubernetes
-	ready, err := s.k8sClient.WaitForSandboxReady(ctx, sandboxID, timeout)
+func (s *SchedulerService) WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+	ready, err := s.k8sClient.WaitForSandboxReady(ctx, sandboxID)
 	if err != nil {
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Error("Error waiting for sandbox to be ready in Kubernetes", logContext...)
+		s.logger.Error("Error waiting for sandbox to be ready in Kubernetes",
+			sandboxID.ZapField(),
+			zap.Error(err))
 		return false, fmt.Errorf("failed to wait for sandbox to be ready: %v", err)
 	}
-
-	if ready {
-		s.logger.Info("Sandbox is ready", logContext...)
-	} else {
-		s.logger.Warn("Sandbox is not ready after timeout", logContext...)
-	}
-
 	return ready, nil
 }

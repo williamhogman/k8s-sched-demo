@@ -131,7 +131,7 @@ func (k *K8sClient) GetEventChannel() <-chan types.PodEvent {
 }
 
 // ScheduleSandbox creates a pod for the sandbox
-func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
+func (k *K8sClient) ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error) {
 	// Use the client's namespace
 	namespace := k.namespace
 
@@ -139,16 +139,8 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	labels := map[string]string{
 		"app":        "sandbox",
 		"managed-by": "scheduler",
-		"sandbox-id": podName,
+		"sandbox-id": sandboxID.String(),
 	}
-
-	// Add all metadata as labels with a prefix to avoid conflicts
-	for key, value := range metadata {
-		if key != "" && value != "" {
-			labels[fmt.Sprintf("sandbox-metadata-%s", key)] = value
-		}
-	}
-
 	annotations := map[string]string{}
 
 	// Define resource requirements (customizable in the future)
@@ -167,27 +159,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "SANDBOX_ID",
-			Value: podName,
-		},
-		{
-			Name:  "SANDBOX_NAMESPACE",
-			Value: namespace,
-		},
-		{
-			Name: "POD_NAME",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "metadata.name",
-				},
-			},
-		},
-		{
-			Name: "POD_IP",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "status.podIP",
-				},
-			},
+			Value: sandboxID.String(),
 		},
 	}
 
@@ -278,7 +250,7 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	// Create full pod specification
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
+			Name:        sandboxID.WithPrefix(),
 			Namespace:   namespace,
 			Labels:      labels,
 			Annotations: annotations,
@@ -287,27 +259,27 @@ func (k *K8sClient) ScheduleSandbox(ctx context.Context, podName string, metadat
 	}
 
 	// Create the pod in Kubernetes
-	createdPod, err := k.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+	_, err := k.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to create pod: %v", err)
 	}
 
-	return createdPod.Name, nil
+	return sandboxID, nil
 }
 
 // ReleaseSandbox deletes a sandbox pod
-func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
+func (k *K8sClient) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) error {
 	namespace := k.namespace
 
 	k.logger.Info("Deleting pod",
-		zap.String("pod", sandboxID),
+		sandboxID.ZapField(),
 		zap.String("namespace", namespace))
 
 	// Delete options (can be adjusted as needed)
 	deleteOptions := metav1.DeleteOptions{}
 
 	// Delete the pod
-	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, sandboxID, deleteOptions)
+	err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, sandboxID.WithPrefix(), deleteOptions)
 	if err != nil {
 		return fmt.Errorf("failed to delete pod %s: %v", sandboxID, err)
 	}
@@ -429,7 +401,7 @@ func (k *K8sClient) processPodEvent(pod *corev1.Pod) {
 }
 
 // CreateOrUpdateProjectService creates or updates a headless service for a project
-func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error {
+func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error {
 	serviceName := fmt.Sprintf("project-%s", projectID)
 
 	// Create the service specification
@@ -444,7 +416,7 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 			},
 			Annotations: map[string]string{
 				"sandbox.scheduler/project-id": projectID,
-				"sandbox.scheduler/sandbox-id": sandboxID,
+				"sandbox.scheduler/sandbox-id": sandboxID.String(),
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -452,7 +424,7 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 			ClusterIP: "None",
 			// Select pods with matching sandbox ID
 			Selector: map[string]string{
-				"sandbox-id": sandboxID,
+				"sandbox-id": sandboxID.String(),
 			},
 			// Expose the main container port
 			Ports: []corev1.ServicePort{
@@ -475,14 +447,14 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 			k.logger.Error("failed to create project service",
 				zap.String("service", serviceName),
 				zap.String("projectID", projectID),
-				zap.String("sandboxID", sandboxID),
+				sandboxID.ZapField(),
 				zap.Error(err))
 			return fmt.Errorf("failed to create project service: %v", err)
 		}
 		k.logger.Info("Created project service",
 			zap.String("service", serviceName),
 			zap.String("projectID", projectID),
-			zap.String("sandboxID", sandboxID))
+			sandboxID.ZapField())
 		return nil
 	}
 
@@ -497,7 +469,7 @@ func (k *K8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID 
 	k.logger.Info("Updated project service",
 		zap.String("service", serviceName),
 		zap.String("projectID", projectID),
-		zap.String("sandboxID", sandboxID))
+		sandboxID.ZapField())
 	return nil
 }
 
@@ -568,15 +540,15 @@ func (k *K8sClient) IsInCluster() bool {
 }
 
 // IsSandboxReady checks if a sandbox pod is ready or at least scheduled
-func (k *K8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (bool, error) {
+func (k *K8sClient) IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	namespace := k.namespace
 
 	k.logger.Debug("Checking if sandbox is ready",
-		zap.String("pod", sandboxID),
+		sandboxID.ZapField(),
 		zap.String("namespace", namespace))
 
 	// Get the pod
-	pod, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, sandboxID, metav1.GetOptions{})
+	pod, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, sandboxID.WithPrefix(), metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			// Pod doesn't exist yet
@@ -618,24 +590,16 @@ func (k *K8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (bool,
 }
 
 // IsSandboxGone checks if a sandbox pod is gone (deleted or not found)
-func (k *K8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bool, error) {
+func (k *K8sClient) IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	namespace := k.namespace
-
-	sandboxID = strings.TrimPrefix(sandboxID, "sandbox-")
-
-	k.logger.Debug("Checking if sandbox is gone",
-		zap.String("pod", sandboxID),
-		zap.String("namespace", namespace))
-
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
 	// Get the pod
-	_, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	_, err := k.clientset.CoreV1().Pods(namespace).Get(ctx, sandboxID.WithPrefix(), metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			// Pod doesn't exist, it's gone
 			return true, nil
 		}
-		return false, fmt.Errorf("failed to get pod %s: %v", podName, err)
+		return false, fmt.Errorf("failed to get pod %s: %v", sandboxID.WithPrefix(), err)
 	}
 
 	// Pod exists, it's not gone
@@ -643,18 +607,12 @@ func (k *K8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bool, 
 }
 
 // WaitForSandboxReady waits for a sandbox pod to be ready, with a timeout
-func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error) {
+func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	namespace := k.namespace
 
 	k.logger.Info("Waiting for sandbox to be ready",
-		zap.String("pod", sandboxID),
-		zap.String("namespace", namespace),
-		zap.Duration("timeout", timeout))
-
-	// Create a context with timeout
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
+		sandboxID.ZapField(),
+		zap.String("namespace", namespace))
 	// Check first before polling
 	ready, err := k.IsSandboxReady(ctx, sandboxID)
 	if err != nil {
@@ -671,17 +629,16 @@ func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, t
 	// Poll until the sandbox is ready or the context is done
 	for {
 		select {
-		case <-ctxWithTimeout.Done():
-			k.logger.Warn("Timeout waiting for sandbox to be ready",
-				zap.String("pod", sandboxID),
-				zap.Duration("timeout", timeout))
-			return false, fmt.Errorf("timeout waiting for sandbox to be ready: %v", ctxWithTimeout.Err())
+		case <-ctx.Done():
+			k.logger.Warn("Context cancelled while waiting for sandbox to be ready",
+				sandboxID.ZapField())
+			return false, fmt.Errorf("context cancelled while waiting for sandbox to be ready: %v", ctx.Err())
 		case <-ticker.C:
 			// Check if the sandbox is ready
 			ready, err := k.IsSandboxReady(ctx, sandboxID)
 			if err != nil {
 				k.logger.Warn("Error checking if sandbox is ready",
-					zap.String("pod", sandboxID),
+					sandboxID.ZapField(),
 					zap.Error(err))
 				// Continue polling
 				continue
@@ -689,7 +646,7 @@ func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, t
 
 			if ready {
 				k.logger.Info("Sandbox is ready",
-					zap.String("pod", sandboxID))
+					sandboxID.ZapField())
 				return true, nil
 			}
 
@@ -697,7 +654,7 @@ func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, t
 			gone, err := k.IsSandboxGone(ctx, sandboxID)
 			if err != nil {
 				k.logger.Warn("Error checking if sandbox is gone",
-					zap.String("pod", sandboxID),
+					sandboxID.ZapField(),
 					zap.Error(err))
 				// Continue polling
 				continue
@@ -705,13 +662,13 @@ func (k *K8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, t
 
 			if gone {
 				k.logger.Warn("Sandbox is gone while waiting for it to be ready",
-					zap.String("pod", sandboxID))
+					sandboxID.ZapField())
 				return false, fmt.Errorf("sandbox is gone while waiting for it to be ready")
 			}
 
 			// Sandbox is not ready yet, continue polling
 			k.logger.Debug("Sandbox is not ready yet, continuing to wait",
-				zap.String("pod", sandboxID))
+				sandboxID.ZapField())
 		}
 	}
 }

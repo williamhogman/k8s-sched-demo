@@ -23,7 +23,7 @@ func main() {
 		// Configure fx logging
 		fx.WithLogger(func(logger *zap.Logger) fxevent.Logger {
 			zl := &fxevent.ZapLogger{Logger: logger}
-			zl.UseLogLevel(zapcore.DebugLevel)
+			zl.UseLogLevel(zapcore.InfoLevel)
 			return zl
 		}),
 

@@ -29,17 +29,15 @@ func NewMockK8sClient(logger *zap.Logger) *MockK8sClient {
 }
 
 // ScheduleSandbox creates a mock sandbox pod
-func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, podName string, metadata map[string]string) (string, error) {
-	m.logger.Info("Mock ScheduleSandbox called",
-		zap.String("podName", podName),
-		zap.Any("metadata", metadata))
-	return podName, nil
+func (m *MockK8sClient) ScheduleSandbox(ctx context.Context, sandboxID types.SandboxID) (types.SandboxID, error) {
+	m.logger.Info("Mock ScheduleSandbox called", sandboxID.ZapField())
+	return sandboxID, nil
 }
 
 // ReleaseSandbox deletes a mock sandbox pod
-func (m *MockK8sClient) ReleaseSandbox(ctx context.Context, sandboxID string) error {
+func (m *MockK8sClient) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) error {
 	m.logger.Info("Mock ReleaseSandbox called",
-		zap.String("sandboxID", sandboxID))
+		sandboxID.ZapField())
 	return nil
 }
 
@@ -60,10 +58,10 @@ func (m *MockK8sClient) StopWatchers() {
 }
 
 // CreateOrUpdateProjectService creates or updates a mock project service
-func (m *MockK8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID string) error {
+func (m *MockK8sClient) CreateOrUpdateProjectService(ctx context.Context, projectID string, sandboxID types.SandboxID) error {
 	m.logger.Info("Mock CreateOrUpdateProjectService called",
 		zap.String("projectID", projectID),
-		zap.String("sandboxID", sandboxID))
+		sandboxID.ZapField())
 	return nil
 }
 
@@ -100,9 +98,9 @@ func (m *MockK8sClient) SendMockEvent(eventType types.PodEventType, podName stri
 }
 
 // IsSandboxReady checks if a mock sandbox is ready
-func (m *MockK8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (bool, error) {
+func (m *MockK8sClient) IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	m.logger.Info("Mock IsSandboxReady called",
-		zap.String("sandboxID", sandboxID))
+		zap.String("sandboxID", sandboxID.String()))
 
 	// For mock purposes, we'll consider all sandboxes ready
 	// In a real implementation, this would check the pod status
@@ -110,9 +108,9 @@ func (m *MockK8sClient) IsSandboxReady(ctx context.Context, sandboxID string) (b
 }
 
 // IsSandboxGone checks if a mock sandbox is gone
-func (m *MockK8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bool, error) {
+func (m *MockK8sClient) IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	m.logger.Info("Mock IsSandboxGone called",
-		zap.String("sandboxID", sandboxID))
+		zap.String("sandboxID", sandboxID.String()))
 
 	// For mock purposes, we'll consider all sandboxes as existing
 	// In a real implementation, this would check if the pod exists
@@ -120,13 +118,9 @@ func (m *MockK8sClient) IsSandboxGone(ctx context.Context, sandboxID string) (bo
 }
 
 // WaitForSandboxReady waits for a mock sandbox to be ready
-func (m *MockK8sClient) WaitForSandboxReady(ctx context.Context, sandboxID string, timeout time.Duration) (bool, error) {
+func (m *MockK8sClient) WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	m.logger.Info("Mock WaitForSandboxReady called",
-		zap.String("sandboxID", sandboxID),
-		zap.Duration("timeout", timeout))
-
-	// For mock purposes, we'll simulate a short delay and then return success
-	// In a real implementation, this would poll until the pod is ready or timeout
+		sandboxID.ZapField())
 	select {
 	case <-ctx.Done():
 		return false, ctx.Err()

@@ -62,7 +62,7 @@ spec:
         env:
         - name: KUBERNETES_NAMESPACE
           value: "sandbox"
-        - name: REDIS_URI
+        - name: SCHEDULER_REDIS_URI
           value: "redis://redis:6379/0"
         - name: PORT
           value: "50051"

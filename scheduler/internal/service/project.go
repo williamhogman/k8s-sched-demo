@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -52,17 +51,17 @@ func (s *ProjectService) GetProjectSandbox(
 		gone, err := s.schedulerService.IsSandboxGone(ctx, sandboxID)
 		if err != nil {
 			s.logger.Error("Failed to check if sandbox is gone",
-				append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+				append(logContext, sandboxID.ZapField(), zap.Error(err))...)
 			// Continue with sandbox creation if we can't determine if it's gone
 		} else if gone {
 			s.logger.Info("Sandbox is gone, will create a new one",
-				append(logContext, zap.String("sandboxID", sandboxID))...)
+				append(logContext, sandboxID.ZapField())...)
 			sandboxID = ""
 		} else {
 			// Sandbox exists, return it
 			hostname := s.k8sClient.GetProjectServiceHostname(projectID)
 			return &schedulerv1.GetProjectSandboxResponse{
-				SandboxId: sandboxID,
+				SandboxId: sandboxID.String(),
 				Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
 				Hostname:  hostname,
 			}, nil
@@ -70,7 +69,7 @@ func (s *ProjectService) GetProjectSandbox(
 	}
 
 	// Create a new sandbox for the project
-	sandboxID, success, err := s.schedulerService.ScheduleSandbox(ctx, projectID, metadata)
+	sandboxID, success, err := s.schedulerService.ScheduleSandbox(ctx, projectID)
 	if err != nil {
 		s.logger.Error("Failed to create sandbox for project",
 			append(logContext, zap.Error(err))...)
@@ -81,7 +80,7 @@ func (s *ProjectService) GetProjectSandbox(
 
 	if !success {
 		s.logger.Error("Failed to create sandbox for project",
-			append(logContext, zap.String("sandboxID", sandboxID))...)
+			append(logContext, zap.String("sandboxID", sandboxID.String()))...)
 		return &schedulerv1.GetProjectSandboxResponse{
 			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
 		}, fmt.Errorf("failed to create sandbox")
@@ -90,20 +89,20 @@ func (s *ProjectService) GetProjectSandbox(
 	// Store the project-sandbox mapping
 	if err := s.store.SetProjectSandbox(ctx, projectID, sandboxID); err != nil {
 		s.logger.Error("Failed to store project-sandbox mapping",
-			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+			append(logContext, zap.String("sandboxID", sandboxID.String()), zap.Error(err))...)
 		// Continue anyway, the sandbox is created
 	}
 
 	// Create or update the headless service for this project
 	if err := s.k8sClient.CreateOrUpdateProjectService(ctx, projectID, sandboxID); err != nil {
 		s.logger.Error("Failed to create/update project service",
-			append(logContext, zap.String("sandboxID", sandboxID), zap.Error(err))...)
+			append(logContext, sandboxID.ZapField(), zap.Error(err))...)
 		// Continue anyway, the sandbox is created
 	}
 
 	if waitForCreation {
 		// Wait for the sandbox to be ready
-		ready, err := s.schedulerService.WaitForSandboxReady(ctx, sandboxID, 10*time.Second)
+		ready, err := s.schedulerService.WaitForSandboxReady(ctx, sandboxID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to wait for sandbox to be ready: %v", err)
 		}
@@ -113,13 +112,13 @@ func (s *ProjectService) GetProjectSandbox(
 			}, nil
 		}
 		return &schedulerv1.GetProjectSandboxResponse{
-			SandboxId: sandboxID,
+			SandboxId: sandboxID.String(),
 			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ACTIVE,
 			Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
 		}, nil
 	} else {
 		return &schedulerv1.GetProjectSandboxResponse{
-			SandboxId: sandboxID,
+			SandboxId: sandboxID.String(),
 			Status:    schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_CREATING,
 			Hostname:  s.k8sClient.GetProjectServiceHostname(projectID),
 		}, nil
