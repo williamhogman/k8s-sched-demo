@@ -20,10 +20,10 @@ func StartServer(cfg *config.Config, projectServer *ProjectServer, logger *zap.L
 	mux.Handle(path, handler)
 
 	// Start the server
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	logger.Info("Starting Project server with Connect API",
 		zap.String("address", addr),
-		zap.Int("port", cfg.Server.Port))
+		zap.Int("port", cfg.Port))
 
 	return http.ListenAndServe(
 		addr,

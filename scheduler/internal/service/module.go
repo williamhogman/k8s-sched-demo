@@ -21,8 +21,7 @@ func ProvideSchedulerService(
 		k8sClient,
 		idempotenceStore,
 		SchedulerServiceConfig{
-			IdempotenceKeyTTL: cfg.Idempotence.TTL,
-			SandboxTTL:        cfg.Sandbox.TTL,
+			SandboxTTL: cfg.SandboxTTL,
 		},
 		logger,
 	)

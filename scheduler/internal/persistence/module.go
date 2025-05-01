@@ -9,7 +9,7 @@ import (
 
 // ProvideStore creates an idempotence store based on the configuration
 func ProvideStore(cfg *config.Config, lc fx.Lifecycle) (Store, error) {
-	store, err := newRedisStore(cfg.Idempotence.RedisURI)
+	store, err := newRedisStore(cfg.RedisURI)
 	if err != nil {
 		return nil, err
 	}

@@ -66,8 +66,8 @@ func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 		if err != nil {
 			logger.Warn("Failed to get in-cluster namespace, using configured namespace",
 				zap.Error(err),
-				zap.String("configured_namespace", cfg.Kubernetes.Namespace))
-			namespace = cfg.Kubernetes.Namespace
+				zap.String("configured_namespace", cfg.Namespace))
+			namespace = cfg.Namespace
 		} else {
 			logger.Info("Using in-cluster namespace", zap.String("namespace", namespace))
 		}
@@ -77,7 +77,7 @@ func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load kubeconfig: %v", err)
 		}
-		namespace = cfg.Kubernetes.Namespace
+		namespace = cfg.Namespace
 	}
 
 	// Creates the clientset
@@ -92,8 +92,8 @@ func NewK8sClient(cfg *config.Config, logger *zap.Logger) (*K8sClient, error) {
 	client := &K8sClient{
 		clientset:    clientset,
 		namespace:    namespace,
-		useGvisor:    cfg.Kubernetes.UseGvisor,
-		sandboxImage: cfg.Kubernetes.SandboxImage,
+		useGvisor:    cfg.UseGvisor,
+		sandboxImage: cfg.SandboxImage,
 		watchCtx:     ctx,
 		watchCancel:  cancel,
 		logger:       logger.Named("k8sclient"),

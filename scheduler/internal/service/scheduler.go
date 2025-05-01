@@ -11,6 +11,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// SchedulerServiceConfig contains configuration for the scheduler service
+type SchedulerServiceConfig struct {
+	SandboxTTL time.Duration
+}
+
 // SchedulerService implements the scheduling service logic
 type SchedulerService struct {
 	k8sClient         k8sclient.K8sClientInterface
@@ -25,12 +30,6 @@ type SchedulerService struct {
 	eventProcessingRunning bool
 }
 
-// SchedulerServiceConfig contains configuration for the scheduler service
-type SchedulerServiceConfig struct {
-	IdempotenceKeyTTL time.Duration
-	SandboxTTL        time.Duration
-}
-
 // NewSchedulerService creates a new scheduler service
 func NewSchedulerService(
 	k8sClient k8sclient.K8sClientInterface,
@@ -42,13 +41,12 @@ func NewSchedulerService(
 	eventCtx, eventCancel := context.WithCancel(context.Background())
 
 	s := &SchedulerService{
-		k8sClient:         k8sClient,
-		store:             store,
-		idempotenceKeyTTL: config.IdempotenceKeyTTL,
-		sandboxTTL:        config.SandboxTTL,
-		logger:            logger,
-		eventCtx:          eventCtx,
-		eventCancel:       eventCancel,
+		k8sClient:   k8sClient,
+		store:       store,
+		sandboxTTL:  config.SandboxTTL,
+		logger:      logger,
+		eventCtx:    eventCtx,
+		eventCancel: eventCancel,
 	}
 	return s
 }

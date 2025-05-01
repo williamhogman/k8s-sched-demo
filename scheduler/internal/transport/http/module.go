@@ -41,10 +41,10 @@ func ProvideServer(p ServerParams) {
 				projectPath, projectHandler := schedulerv1connect.NewProjectServiceHandler(projectServer)
 				mux.Handle(projectPath, projectHandler)
 
-				addr := fmt.Sprintf(":%d", p.Config.Server.Port)
+				addr := fmt.Sprintf(":%d", p.Config.Port)
 				logger.Info("Starting Scheduler server with Connect API",
 					zap.String("address", addr),
-					zap.Int("port", p.Config.Server.Port))
+					zap.Int("port", p.Config.Port))
 
 				if err := http.ListenAndServe(
 					addr,

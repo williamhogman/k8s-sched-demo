@@ -12,7 +12,7 @@ func ProvideLogger(cfg *config.Config) (*zap.Logger, error) {
 	var logger *zap.Logger
 	var err error
 
-	if cfg.Logging.Development {
+	if cfg.DevelopmentLogging {
 		cfg := zap.NewDevelopmentConfig()
 		cfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
 		logger, err = cfg.Build()

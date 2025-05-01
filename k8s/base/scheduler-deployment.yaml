@@ -60,20 +60,10 @@ spec:
         - containerPort: 50051
           name: grpc
         env:
-        - name: KUBERNETES_NAMESPACE
-          value: "sandbox"
-        - name: SCHEDULER_REDIS_URI
+        - name: REDIS_URI
           value: "redis://redis:6379/0"
-        - name: PORT
-          value: "50051"
-        - name: NAMESPACE
-          value: "sandbox"
-        - name: DEV_LOGGING
-          value: "true"
-        - name: SCHEDULER_SANDBOX_IMAGE
+        - name: SANDBOX_IMAGE
           value: "ko.local/sandbox:latest"
-        - name: IDEMPOTENCE
-          value: "redis"        
 ---
 apiVersion: v1
 kind: Service

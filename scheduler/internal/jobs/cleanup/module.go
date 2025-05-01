@@ -27,13 +27,13 @@ func ProvideManager(p ManagerParams) {
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			logger.Info("Starting sandbox cleanup job",
-				zap.Int("intervalSeconds", p.Config.Sandbox.CleanupIntervalSecs),
-				zap.Int("batchSize", p.Config.Sandbox.CleanupBatchSize))
+				zap.Int("intervalSeconds", p.Config.CleanupIntervalSecs),
+				zap.Int("batchSize", p.Config.CleanupBatchSize))
 
 			cleanupManager := NewManager(
 				p.SchedulerService,
-				p.Config.Sandbox.CleanupIntervalSecs,
-				p.Config.Sandbox.CleanupBatchSize,
+				p.Config.CleanupIntervalSecs,
+				p.Config.CleanupBatchSize,
 				logger,
 			)
 			cleanupManager.Start()

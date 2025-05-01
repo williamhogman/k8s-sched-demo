@@ -10,7 +10,7 @@ import (
 
 // ProvideK8sClient creates a K8s client based on the configuration
 func ProvideK8sClient(cfg *config.Config, logger *zap.Logger) (K8sClientInterface, error) {
-	if cfg.Kubernetes.MockMode {
+	if cfg.MockMode {
 		return NewMockK8sClient(logger), nil
 	}
 
