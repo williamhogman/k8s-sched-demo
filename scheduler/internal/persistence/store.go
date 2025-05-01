@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
@@ -20,7 +19,7 @@ type ClaimResult struct {
 	// Private fields
 	store          idempotenceSink
 	idempotenceKey string
-	ttl            time.Duration
+	completed      bool
 }
 
 // HasExistingSandbox returns true if the result contains a valid sandbox ID
@@ -53,7 +52,11 @@ func (r ClaimResult) Error() string {
 
 // CompleteClaim completes the idempotence claim with the provided sandbox ID
 // Only applicable if Claimed is true
-func (r ClaimResult) Complete(ctx context.Context, sandboxID types.SandboxID) error {
+func (r *ClaimResult) Complete(ctx context.Context, sandboxID types.SandboxID) error {
+	if r.completed {
+		return errors.New("already completed")
+	}
+
 	if !r.Claimed {
 		return nil
 	}
@@ -62,10 +65,20 @@ func (r ClaimResult) Complete(ctx context.Context, sandboxID types.SandboxID) er
 		return errors.New("store reference is missing")
 	}
 
-	return r.store.CompletePendingCreation(ctx, r.idempotenceKey, sandboxID, r.ttl)
+	err := r.store.CompletePendingCreation(ctx, r.idempotenceKey, sandboxID)
+	if err != nil {
+		return err
+	}
+
+	r.completed = true
+	return nil
 }
 
-func (r ClaimResult) Drop(ctx context.Context) error {
+func (r *ClaimResult) Drop(ctx context.Context) error {
+	if r.completed {
+		return nil
+	}
+
 	if !r.Claimed {
 		return nil
 	}
@@ -81,7 +94,7 @@ func (r ClaimResult) Drop(ctx context.Context) error {
 // idempotenceSink allows completing and dropping idempotence keys
 type idempotenceSink interface {
 	// CompletePendingCreation updates a pending sandbox creation with its final sandboxID
-	CompletePendingCreation(ctx context.Context, idempotenceKey string, sandboxID types.SandboxID, ttl time.Duration) error
+	CompletePendingCreation(ctx context.Context, idempotenceKey string, sandboxID types.SandboxID) error
 
 	// DropPendingCreation removes a pending creation marker without setting a sandbox ID
 	// Used when sandbox creation fails and we need to allow another attempt
@@ -92,8 +105,8 @@ type idempotenceSink interface {
 type Store interface {
 	// ClaimOrWait tries to claim the idempotence key, and if unable, waits for it to complete
 	// Returns a ClaimResult indicating whether we claimed it, got an existing sandbox, or encountered an error
-	// Uses the context for timeout/cancellation and the ttl for key expiration if claimed
-	ClaimOrWait(ctx context.Context, idempotenceKey string, ttl time.Duration) ClaimResult
+	// Uses the context for timeout/cancellation
+	ClaimOrWait(ctx context.Context, idempotenceKey string) ClaimResult
 
 	// IsSandboxReleased checks if a sandbox was recently released
 	// Returns true if the sandbox was marked as released, false otherwise

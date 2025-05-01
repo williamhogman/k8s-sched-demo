@@ -110,7 +110,8 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	defer cancel()
 
 	// Try to claim or wait for the idempotence key
-	result := s.store.ClaimOrWait(claimCtx, idempotenceKey, s.idempotenceKeyTTL)
+	result := s.store.ClaimOrWait(claimCtx, idempotenceKey)
+	defer result.Drop(ctx)
 
 	// Handle existing sandbox case
 	if result.HasExistingSandbox() {
@@ -133,8 +134,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	sandboxID, err := s.k8sClient.ScheduleSandbox(ctx)
 	logContext = append(logContext, sandboxID.ZapField())
 	if err != nil {
-		dropErr := result.Drop(ctx)
-		logContext = append(logContext, zap.NamedError("k8sError", err), zap.NamedError("idempotenceDropError", dropErr))
+		logContext = append(logContext, zap.NamedError("k8sError", err))
 		s.logger.Error("Failed to schedule sandbox", logContext...)
 		return "", fmt.Errorf("failed to schedule: %v", err)
 	}

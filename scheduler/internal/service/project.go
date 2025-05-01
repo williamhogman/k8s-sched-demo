@@ -81,7 +81,7 @@ func (s *ProjectService) GetProjectSandbox(
 	// Store the project-sandbox mapping
 	if err := s.store.SetProjectSandbox(ctx, projectID, sandboxID); err != nil {
 		s.logger.Error("Failed to store project-sandbox mapping",
-			append(logContext, zap.String("sandboxID", sandboxID.String()), zap.Error(err))...)
+			append(logContext, sandboxID.ZapField(), zap.Error(err))...)
 		// Continue anyway, the sandbox is created
 	}
 

@@ -11,6 +11,11 @@ import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
 
+const (
+	pendingKeyTTL     = 1 * time.Minute
+	idempotenceKeyTTL = 10 * time.Minute
+)
+
 // redisStore implements the Store interface using Redis
 type redisStore struct {
 	client    *redis.Client
@@ -97,9 +102,9 @@ func (r *redisStore) GetSandboxID(ctx context.Context, idempotenceKey string) (t
 }
 
 // MarkPendingCreation marks that a sandbox is being created for this idempotence key
-func (r *redisStore) MarkPendingCreation(ctx context.Context, idempotenceKey string, ttl time.Duration) (bool, error) {
+func (r *redisStore) MarkPendingCreation(ctx context.Context, idempotenceKey string) (bool, error) {
 	pendingKey := r.formPendingKey(idempotenceKey)
-	set, err := r.client.SetNX(ctx, pendingKey, "1", ttl).Result()
+	set, err := r.client.SetNX(ctx, pendingKey, "1", pendingKeyTTL).Result()
 	if err != nil {
 		return false, fmt.Errorf("failed to mark pending creation for key %s: %w", idempotenceKey, err)
 	}
@@ -107,16 +112,16 @@ func (r *redisStore) MarkPendingCreation(ctx context.Context, idempotenceKey str
 }
 
 // CompletePendingCreation updates a pending sandbox creation with its final sandboxID
-func (r *redisStore) CompletePendingCreation(ctx context.Context, idempotenceKey string, sandboxID types.SandboxID, ttl time.Duration) error {
+func (r *redisStore) CompletePendingCreation(ctx context.Context, idempotenceKey string, sandboxID types.SandboxID) error {
 	pipe := r.client.TxPipeline()
 
 	// Store the sandbox ID with the idempotence key
 	key := r.formKey(idempotenceKey)
-	pipe.Set(ctx, key, sandboxID.String(), ttl)
+	pipe.Set(ctx, key, sandboxID.String(), idempotenceKeyTTL)
 
 	// Set the sandbox -> idempotence key mapping (reverse mapping)
 	sandboxKey := r.formSandboxIdempotenceKey(sandboxID)
-	pipe.Set(ctx, sandboxKey, idempotenceKey, ttl)
+	pipe.Set(ctx, sandboxKey, idempotenceKey, idempotenceKeyTTL)
 
 	// Remove the pending key
 	pendingKey := r.formPendingKey(idempotenceKey)
@@ -312,7 +317,6 @@ func (r *redisStore) awaitIdempotenceCompletion(ctx context.Context, idempotence
 			if err != nil {
 				return "", fmt.Errorf("error checking pending key: %w", err)
 			}
-
 			// If pending key no longer exists but we still don't have a sandbox ID,
 			// it means the concurrent creation was abandoned/failed
 			if exists == 0 {
@@ -341,7 +345,7 @@ func (r *redisStore) DropPendingCreation(ctx context.Context, idempotenceKey str
 // ClaimOrWait tries to claim the idempotence key, and if unable, waits for it to complete
 // Returns a ClaimResult indicating whether we claimed it, got an existing sandbox, or encountered an error
 // Uses the context for timeout/cancellation and the ttl for key expiration if claimed
-func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string, ttl time.Duration) ClaimResult {
+func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string) ClaimResult {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
 		return ClaimResult{
@@ -350,7 +354,6 @@ func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string, ttl
 			Err:            fmt.Errorf("context error: %w", err),
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	}
 
@@ -359,35 +362,26 @@ func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string, ttl
 	if err == nil && sandboxID != "" {
 		// We found an existing sandbox, return it but indicate we didn't claim
 		return ClaimResult{
-			Claimed:        false,
 			SandboxID:      sandboxID,
-			Err:            nil,
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	} else if err != nil && err != ErrNotFound {
 		// Return actual errors (not just key not found)
 		return ClaimResult{
-			Claimed:        false,
-			SandboxID:      "",
 			Err:            fmt.Errorf("error checking for existing sandbox: %w", err),
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	}
 
 	// Try to mark this key as pending creation
-	marked, err := r.MarkPendingCreation(ctx, idempotenceKey, ttl)
+	marked, err := r.MarkPendingCreation(ctx, idempotenceKey)
 	if err != nil {
 		return ClaimResult{
-			Claimed:        false,
-			SandboxID:      "",
 			Err:            fmt.Errorf("error marking pending creation: %w", err),
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	}
 
@@ -395,11 +389,8 @@ func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string, ttl
 		// We successfully claimed the key
 		return ClaimResult{
 			Claimed:        true,
-			SandboxID:      "",
-			Err:            nil,
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	}
 
@@ -408,22 +399,16 @@ func (r *redisStore) ClaimOrWait(ctx context.Context, idempotenceKey string, ttl
 	sandboxID, err = r.awaitIdempotenceCompletion(ctx, idempotenceKey)
 	if err != nil {
 		return ClaimResult{
-			Claimed:        false,
-			SandboxID:      "",
 			Err:            fmt.Errorf("error waiting for idempotence completion: %w", err),
 			store:          r,
 			idempotenceKey: idempotenceKey,
-			ttl:            ttl,
 		}
 	}
 
 	// Successfully waited for completion
 	return ClaimResult{
-		Claimed:        false,
 		SandboxID:      sandboxID,
-		Err:            nil,
 		store:          r,
 		idempotenceKey: idempotenceKey,
-		ttl:            ttl,
 	}
 }
