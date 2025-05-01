@@ -105,60 +105,42 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	// Create log context that we'll build up throughout the function
 	logContext := []zap.Field{zap.String("idempotenceKey", idempotenceKey)}
 
-	// Check if we already have a sandbox for this idempotence key
-	sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
-	if err == nil {
-		// We found an existing sandbox for this idempotence key
-		logContext = append(logContext, sandboxID.ZapField(), zap.Bool("reused", true))
-		s.logger.Info("Found existing sandbox for idempotence key", logContext...)
-		return sandboxID, nil // Return the existing sandbox, not newly created
-	} else if err != nil && err != persistence.ErrNotFound {
-		// Only log actual errors, not key not found
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Warn("Error checking idempotence key", logContext...)
+	// Create a context with timeout for the claim operation
+	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Try to claim or wait for the idempotence key
+	result := s.store.ClaimOrWait(claimCtx, idempotenceKey, s.idempotenceKeyTTL)
+
+	// Handle existing sandbox case
+	if result.HasExistingSandbox() {
+		logContext = append(logContext, result.SandboxID.ZapField(), zap.Bool("reused", true))
+		s.logger.Info("Using existing sandbox", logContext...)
+		return result.SandboxID, nil
 	}
 
-	// Try to mark this idempotence key as pending creation to handle concurrent requests
-	marked, err := s.store.MarkPendingCreation(ctx, idempotenceKey, s.idempotenceKeyTTL)
-	if err != nil {
-		logContext = append(logContext, zap.Error(err))
-		s.logger.Warn("Error marking pending creation", logContext...)
-		// Continue anyway, worst case we create multiple sandboxes
-	} else if !marked {
-		// Someone else is already creating a sandbox for this key
-		s.logger.Debug("Concurrent creation detected", logContext...)
-
-		// Wait for a short time and check if the sandbox ID is available
-		for i := 0; i < 10; i++ { // Try up to 10 times
-			time.Sleep(200 * time.Millisecond) // Wait 200ms between checks
-
-			sandboxID, err := s.store.GetSandboxID(ctx, idempotenceKey)
-			if err == nil && sandboxID != "" {
-				logContext = append(logContext,
-					sandboxID.ZapField(),
-					zap.Int("attempt", i+1),
-					zap.Bool("concurrent", true))
-				s.logger.Info("Found sandbox created by concurrent request", logContext...)
-				return sandboxID, nil
-			}
-		}
-
-		logContext = append(logContext, zap.Int("waitAttempts", 10))
-		s.logger.Info("Timed out waiting for concurrent creation, proceeding with own creation", logContext...)
+	// Handle timeout errors specifically
+	if result.IsTimeout() {
+		return "", fmt.Errorf("timeout waiting for idempotence claim: %v", result.Error())
+	} else if result.HasError() {
+		logContext = append(logContext, zap.String("error", result.Error()))
+		s.logger.Warn("Error during idempotence claim, proceeding with creation", logContext...)
+	} else if result.Claimed {
+		s.logger.Debug("Successfully claimed idempotence key", logContext...)
 	}
 
-	// Schedule the sandbox on Kubernetes
-	sandboxID, err = s.k8sClient.ScheduleSandbox(ctx)
+	// At this point, we need to create a new sandbox
+	sandboxID, err := s.k8sClient.ScheduleSandbox(ctx)
 	logContext = append(logContext, sandboxID.ZapField())
 	if err != nil {
-		removeMappingErr := s.store.RemoveSandboxMapping(ctx, sandboxID)
-		logContext = append(logContext, zap.NamedError("k8sError", err), zap.NamedError("removeMappingError", removeMappingErr))
+		dropErr := result.Drop(ctx)
+		logContext = append(logContext, zap.NamedError("k8sError", err), zap.NamedError("idempotenceDropError", dropErr))
 		s.logger.Error("Failed to schedule sandbox", logContext...)
 		return "", fmt.Errorf("failed to schedule: %v", err)
 	}
 
-	errIdempotenceStore := s.store.CompletePendingCreation(ctx, idempotenceKey, sandboxID, s.idempotenceKeyTTL)
-	logContext = append(logContext, zap.NamedError("idempotenceStoreError", errIdempotenceStore))
+	idempotenceErr := result.Complete(ctx, sandboxID)
+	logContext = append(logContext, zap.NamedError("idempotenceError", idempotenceErr))
 	s.logger.Info("Successfully scheduled sandbox", logContext...)
 
 	return sandboxID, nil

@@ -2,8 +2,11 @@ package persistence
 
 import "errors"
 
-// Common errors that can be returned by persistence store implementations
+// Common errors for persistence operations
 var (
-	// ErrNotFound is returned when an item is not found in the store
-	ErrNotFound = errors.New("not found")
+	// ErrNotFound is returned when a key is not found in the store
+	ErrNotFound = errors.New("key not found in store")
+
+	// ErrConcurrentCreationFailed is returned when a concurrent creation process was abandoned
+	ErrConcurrentCreationFailed = errors.New("concurrent creation failed or was abandoned")
 )
