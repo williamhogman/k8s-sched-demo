@@ -24,6 +24,13 @@ type Config struct {
 	CleanupBatchSize    int           `envconfig:"CLEANUP_BATCH_SIZE" default:"50"`
 	SandboxTTL          time.Duration `envconfig:"SANDBOX_TTL" default:"15m"`
 
+	// Sandbox pool settings
+	PoolEnabled             bool          `envconfig:"POOL_ENABLED" default:"true"`             // Whether to use the sandbox pool
+	PoolSize                int           `envconfig:"POOL_SIZE" default:"5"`                   // Desired number of sandboxes in the pool
+	PoolRefreshIntervalSecs int           `envconfig:"POOL_REFRESH_INTERVAL_SECS" default:"15"` // How often to check and replenish the pool
+	PoolMaxPending          int           `envconfig:"POOL_MAX_PENDING" default:"10"`           // Maximum number of pending sandboxes
+	PoolSandboxTimeout      time.Duration `envconfig:"POOL_SANDBOX_TIMEOUT" default:"5m"`       // How long to wait for a sandbox to be ready
+
 	// Idempotence store settings
 	RedisURI string `envconfig:"REDIS_URI" default:"redis://localhost:6379/0"`
 

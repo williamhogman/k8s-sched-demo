@@ -44,9 +44,20 @@ func ProvideIdempotenceStore(client *redis.Client, cfg *config.Config) (Idempote
 	return store, nil
 }
 
+// ProvideSandboxPoolStore creates a sandbox pool store based on the configuration
+func ProvideSandboxPoolStore(client *redis.Client, cfg *config.Config) (SandboxPoolStore, error) {
+	store, err := NewRedisSandboxPoolStore(client, defaultKeyPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	return store, nil
+}
+
 // Module provides the persistence dependencies to the fx container
 var Module = fx.Options(
 	fx.Provide(ProvideRedisClient),
 	fx.Provide(ProvideStore),
 	fx.Provide(ProvideIdempotenceStore),
+	fx.Provide(ProvideSandboxPoolStore),
 )

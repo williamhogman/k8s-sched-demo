@@ -12,6 +12,7 @@ import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/logging"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/project"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/sandboxpool"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/transport"
 )
@@ -33,6 +34,7 @@ func main() {
 		k8sclient.Module,
 		persistence.Module,
 		scheduler.Module,
+		sandboxpool.Module,
 		project.Module,
 		transport.Module,
 		jobs.Module,

@@ -2,14 +2,17 @@ package project
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/sandboxpool"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
@@ -18,7 +21,9 @@ import (
 type ServiceParams struct {
 	fx.In
 
+	Config           *config.Config
 	SchedulerService *scheduler.Service
+	SandboxPool      *sandboxpool.Service `optional:"true"`
 	Store            persistence.Store
 	K8sClient        k8sclient.K8sClientInterface
 	Logger           *zap.Logger
@@ -26,7 +31,9 @@ type ServiceParams struct {
 
 // Service implements the project-level sandbox management
 type Service struct {
+	config           *config.Config
 	schedulerService *scheduler.Service
+	sandboxPool      *sandboxpool.Service
 	store            persistence.Store
 	k8sClient        k8sclient.K8sClientInterface
 	logger           *zap.Logger
@@ -37,7 +44,9 @@ func New(
 	params ServiceParams,
 ) *Service {
 	return &Service{
+		config:           params.Config,
 		schedulerService: params.SchedulerService,
+		sandboxPool:      params.SandboxPool,
 		store:            params.Store,
 		k8sClient:        params.K8sClient,
 		logger:           params.Logger.Named("project-service"),
@@ -78,13 +87,20 @@ func (s *Service) GetProjectSandbox(
 	}
 
 	// Create a new sandbox for the project
-	sandboxID, err = s.schedulerService.ScheduleSandbox(ctx, projectID.String())
-	if err != nil {
+	sandboxID, schedulingErr := s.sandboxPool.GetSandbox(ctx, projectID.String())
+	if schedulingErr != nil && !errors.Is(schedulingErr, persistence.ErrPoolEmpty) {
+		return nil, schedulingErr
+	}
+	if sandboxID == "" {
+		sandboxID, schedulingErr = s.schedulerService.ScheduleSandbox(ctx, projectID.String())
+	}
+
+	if schedulingErr != nil {
 		s.logger.Error("Failed to create sandbox for project",
-			append(logContext, zap.Error(err))...)
+			append(logContext, zap.Error(schedulingErr))...)
 		return &schedulerv1.GetProjectSandboxResponse{
 			Status: schedulerv1.ProjectSandboxStatus_PROJECT_SANDBOX_STATUS_ERROR,
-		}, fmt.Errorf("failed to create sandbox: %v", err)
+		}, fmt.Errorf("failed to create sandbox: %v", schedulingErr)
 	}
 
 	// Store the project-sandbox mapping

@@ -9,4 +9,7 @@ var (
 
 	// ErrConcurrentCreationFailed is returned when a concurrent sandbox creation fails
 	ErrConcurrentCreationFailed = errors.New("concurrent sandbox creation failed")
+
+	// ErrPoolEmpty is returned when the sandbox pool is empty
+	ErrPoolEmpty = errors.New("pool is empty")
 )
