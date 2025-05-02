@@ -12,7 +12,8 @@ import (
 
 	"github.com/williamhogman/k8s-sched-demo/gen/will/scheduler/v1/schedulerv1connect"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/project"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 )
 
 // ServerParams contains the dependencies for the server
@@ -21,8 +22,8 @@ type ServerParams struct {
 
 	Lifecycle        fx.Lifecycle
 	Config           *config.Config
-	SchedulerService *service.SchedulerService
-	ProjectService   *service.ProjectService
+	SchedulerService *scheduler.Service
+	ProjectService   *project.Service
 	Logger           *zap.Logger
 }
 

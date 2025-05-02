@@ -1,42 +1,51 @@
-package service
+package project
 
 import (
 	"context"
 	"fmt"
 
+	"go.uber.org/fx"
 	"go.uber.org/zap"
 
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
 
-// ProjectService implements the project-level sandbox management
-type ProjectService struct {
-	schedulerService *SchedulerService
+// ServiceParams contains dependencies for the project service
+type ServiceParams struct {
+	fx.In
+
+	SchedulerService *scheduler.Service
+	Store            persistence.Store
+	K8sClient        k8sclient.K8sClientInterface
+	Logger           *zap.Logger
+}
+
+// Service implements the project-level sandbox management
+type Service struct {
+	schedulerService *scheduler.Service
 	store            persistence.Store
 	k8sClient        k8sclient.K8sClientInterface
 	logger           *zap.Logger
 }
 
-// NewProjectService creates a new project service
-func NewProjectService(
-	schedulerService *SchedulerService,
-	store persistence.Store,
-	k8sClient k8sclient.K8sClientInterface,
-	logger *zap.Logger,
-) *ProjectService {
-	return &ProjectService{
-		schedulerService: schedulerService,
-		store:            store,
-		k8sClient:        k8sClient,
-		logger:           logger.Named("project-service"),
+// New creates a new project service
+func New(
+	params ServiceParams,
+) *Service {
+	return &Service{
+		schedulerService: params.SchedulerService,
+		store:            params.Store,
+		k8sClient:        params.K8sClient,
+		logger:           params.Logger.Named("project-service"),
 	}
 }
 
 // GetProjectSandbox gets or creates a sandbox for a project
-func (s *ProjectService) GetProjectSandbox(
+func (s *Service) GetProjectSandbox(
 	ctx context.Context,
 	projectID types.ProjectID,
 	waitForCreation bool,

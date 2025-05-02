@@ -4,9 +4,9 @@ import "errors"
 
 // Common errors for persistence operations
 var (
-	// ErrNotFound is returned when a key is not found in the store
-	ErrNotFound = errors.New("key not found in store")
+	// ErrNotFound is returned when no entry is found for a key
+	ErrNotFound = errors.New("not found")
 
-	// ErrConcurrentCreationFailed is returned when a concurrent creation process was abandoned
-	ErrConcurrentCreationFailed = errors.New("concurrent creation failed or was abandoned")
+	// ErrConcurrentCreationFailed is returned when a concurrent sandbox creation fails
+	ErrConcurrentCreationFailed = errors.New("concurrent sandbox creation failed")
 )

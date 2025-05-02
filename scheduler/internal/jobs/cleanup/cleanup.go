@@ -4,13 +4,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 	"go.uber.org/zap"
 )
 
 // Manager handles the periodic cleanup of expired sandboxes
 type Manager struct {
-	service      *service.SchedulerService
+	service      *scheduler.Service
 	intervalSecs int
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -18,7 +18,7 @@ type Manager struct {
 }
 
 // NewManager creates a new cleanup manager
-func NewManager(service *service.SchedulerService, intervalSecs, batchSize int, logger *zap.Logger) *Manager {
+func NewManager(service *scheduler.Service, intervalSecs, batchSize int, logger *zap.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		service:      service,

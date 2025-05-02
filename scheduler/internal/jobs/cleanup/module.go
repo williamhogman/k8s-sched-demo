@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 )
 
 // ManagerParams contains the dependencies for the cleanup manager
@@ -16,7 +16,7 @@ type ManagerParams struct {
 
 	Lifecycle        fx.Lifecycle
 	Config           *config.Config
-	SchedulerService *service.SchedulerService
+	SchedulerService *scheduler.Service
 	Logger           *zap.Logger
 }
 

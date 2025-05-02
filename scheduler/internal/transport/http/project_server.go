@@ -7,18 +7,18 @@ import (
 	"go.uber.org/zap"
 
 	schedulerv1 "github.com/williamhogman/k8s-sched-demo/gen/go/will/scheduler/v1"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/service"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/project"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
 
 // ProjectServer implements the ConnectRPC ProjectService
 type ProjectServer struct {
-	projectService *service.ProjectService
+	projectService *project.Service
 	logger         *zap.Logger
 }
 
 // NewProjectServer creates a new instance of ProjectServer
-func NewProjectServer(projectService *service.ProjectService, logger *zap.Logger) *ProjectServer {
+func NewProjectServer(projectService *project.Service, logger *zap.Logger) *ProjectServer {
 	return &ProjectServer{
 		projectService: projectService,
 		logger:         logger.Named("project-server"),

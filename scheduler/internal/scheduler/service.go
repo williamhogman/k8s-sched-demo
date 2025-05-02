@@ -1,23 +1,38 @@
-package service
+package scheduler
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	k8sclient "github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
-	persistence "github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
-	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
+	"go.uber.org/fx"
 	"go.uber.org/zap"
+
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/config"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/k8sclient"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/persistence"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/types"
 )
 
-// SchedulerServiceConfig contains configuration for the scheduler service
-type SchedulerServiceConfig struct {
+// SchedulerServiceParams contains all dependencies for the scheduler service
+type SchedulerServiceParams struct {
+	fx.In
+
+	Config           *config.Config
+	K8sClient        k8sclient.K8sClientInterface
+	IdempotenceStore persistence.IdempotenceStore
+	Store            persistence.Store
+	Logger           *zap.Logger
+}
+
+// ServiceConfig contains configuration for the scheduler service
+type ServiceConfig struct {
 	SandboxTTL time.Duration
 }
 
-// SchedulerService implements the scheduling service logic
-type SchedulerService struct {
+// Service implements the scheduling service logic
+type Service struct {
+	idempotenceStore  persistence.IdempotenceStore
 	k8sClient         k8sclient.K8sClientInterface
 	store             persistence.Store
 	idempotenceKeyTTL time.Duration
@@ -30,29 +45,27 @@ type SchedulerService struct {
 	eventProcessingRunning bool
 }
 
-// NewSchedulerService creates a new scheduler service
-func NewSchedulerService(
-	k8sClient k8sclient.K8sClientInterface,
-	store persistence.Store,
-	config SchedulerServiceConfig,
-	logger *zap.Logger,
-) *SchedulerService {
+// New creates a new scheduler service
+func New(
+	params SchedulerServiceParams,
+) *Service {
 	// Create a context for event processing
 	eventCtx, eventCancel := context.WithCancel(context.Background())
 
-	s := &SchedulerService{
-		k8sClient:   k8sClient,
-		store:       store,
-		sandboxTTL:  config.SandboxTTL,
-		logger:      logger,
-		eventCtx:    eventCtx,
-		eventCancel: eventCancel,
+	s := &Service{
+		idempotenceStore: params.IdempotenceStore,
+		k8sClient:        params.K8sClient,
+		store:            params.Store,
+		sandboxTTL:       params.Config.SandboxTTL,
+		logger:           params.Logger,
+		eventCtx:         eventCtx,
+		eventCancel:      eventCancel,
 	}
 	return s
 }
 
-// startEventProcessing begins listening for pod events from the K8s client
-func (s *SchedulerService) startEventProcessing() {
+// StartEventProcessing begins listening for pod events from the K8s client
+func (s *Service) StartEventProcessing() {
 	if s.eventProcessingRunning {
 		return // Already running
 	}
@@ -87,7 +100,7 @@ func (s *SchedulerService) startEventProcessing() {
 }
 
 // handlePodEvent processes pod events from the k8s client
-func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
+func (s *Service) handlePodEvent(event types.PodEvent) {
 	s.ReleaseSandbox(context.Background(), event.SandboxID)
 	s.logger.Info("released sandbox after pod deletion event",
 		event.SandboxID.ZapField(),
@@ -95,7 +108,7 @@ func (s *SchedulerService) handlePodEvent(event types.PodEvent) {
 }
 
 // ScheduleSandbox handles scheduling a sandbox
-func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey string) (types.SandboxID, error) {
+func (s *Service) ScheduleSandbox(ctx context.Context, idempotenceKey string) (types.SandboxID, error) {
 	if idempotenceKey == "" {
 		return "", fmt.Errorf("idempotence key cannot be empty")
 	}
@@ -108,7 +121,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 	defer cancel()
 
 	// Try to claim or wait for the idempotence key
-	result := s.store.ClaimOrWait(claimCtx, idempotenceKey)
+	result := s.idempotenceStore.ClaimOrWait(claimCtx, idempotenceKey)
 	defer result.Drop(ctx)
 
 	// Handle existing sandbox case
@@ -145,7 +158,7 @@ func (s *SchedulerService) ScheduleSandbox(ctx context.Context, idempotenceKey s
 }
 
 // ReleaseSandbox handles deleting a sandbox
-func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) {
+func (s *Service) ReleaseSandbox(ctx context.Context, sandboxID types.SandboxID) {
 	errRedis := s.store.RemoveSandboxMapping(ctx, sandboxID)
 	errK8s := s.k8sClient.ReleaseSandbox(ctx, sandboxID)
 
@@ -157,7 +170,7 @@ func (s *SchedulerService) ReleaseSandbox(ctx context.Context, sandboxID types.S
 }
 
 // CleanupExpiredSandboxes finds and cleans up sandboxes that have been running for too long
-func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, error) {
+func (s *Service) CleanupExpiredSandboxes(ctx context.Context) (int, error) {
 	maxAge := s.sandboxTTL
 
 	// Calculate the cutoff time for old pods
@@ -217,13 +230,14 @@ func (s *SchedulerService) CleanupExpiredSandboxes(ctx context.Context) (int, er
 	return totalReleased, nil
 }
 
-func (s *SchedulerService) Close() error {
+// Close stops the event processing
+func (s *Service) Close() error {
 	s.eventCancel()
 	return nil
 }
 
 // IsSandboxReady checks if a sandbox is ready according to Kubernetes
-func (s *SchedulerService) IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+func (s *Service) IsSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	if sandboxID == "" {
 		return false, fmt.Errorf("sandbox ID cannot be empty")
 	}
@@ -241,7 +255,7 @@ func (s *SchedulerService) IsSandboxReady(ctx context.Context, sandboxID types.S
 }
 
 // IsSandboxGone checks if a sandbox is gone according to Kubernetes
-func (s *SchedulerService) IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+func (s *Service) IsSandboxGone(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	// Create log context with sandbox ID
 	logContext := []zap.Field{sandboxID.ZapField()}
 
@@ -264,7 +278,7 @@ func (s *SchedulerService) IsSandboxGone(ctx context.Context, sandboxID types.Sa
 }
 
 // WaitForSandboxReady waits for a sandbox to be ready according to Kubernetes
-func (s *SchedulerService) WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
+func (s *Service) WaitForSandboxReady(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	ready, err := s.k8sClient.WaitForSandboxReady(ctx, sandboxID)
 	if err != nil {
 		s.logger.Error("Error waiting for sandbox to be ready in Kubernetes",
