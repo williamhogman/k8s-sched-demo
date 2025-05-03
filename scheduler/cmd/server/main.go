@@ -15,6 +15,7 @@ import (
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/sandboxpool"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/scheduler"
 	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/transport"
+	"github.com/williamhogman/k8s-sched-demo/scheduler/internal/xds"
 )
 
 func main() {
@@ -38,6 +39,7 @@ func main() {
 		project.Module,
 		transport.Module,
 		jobs.Module,
+		xds.Module,
 	)
 
 	app.Run()

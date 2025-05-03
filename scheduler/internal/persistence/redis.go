@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -12,9 +13,11 @@ import (
 )
 
 const (
-	pendingKeyTTL     = 1 * time.Minute
-	idempotenceKeyTTL = 10 * time.Minute
-	defaultKeyPrefix  = "sch:"
+	pendingKeyTTL        = 1 * time.Minute
+	idempotenceKeyTTL    = 10 * time.Minute
+	defaultKeyPrefix     = "sch:"
+	projectUpdateChannel = "project-sandbox-updates"
+	projectSetKey        = "all-projects-set" // Set containing all project IDs
 )
 
 // redisStore implements the Store interface using Redis
@@ -81,6 +84,11 @@ func (r *redisStore) formSandboxProjectKey(sandboxID types.SandboxID) string {
 	return r.keyPrefix + "sandbox:" + sandboxID.String()
 }
 
+// formAllProjectsSetKey creates a Redis key for the set of all projects
+func (r *redisStore) formAllProjectsSetKey() string {
+	return r.keyPrefix + projectSetKey
+}
+
 // IsSandboxReleased checks if a sandbox was recently released
 func (r *redisStore) IsSandboxReleased(ctx context.Context, sandboxID types.SandboxID) (bool, error) {
 	key := r.formReleasedKey(sandboxID)
@@ -133,6 +141,15 @@ func (r *redisStore) SetProjectSandbox(ctx context.Context, projectID types.Proj
 	sandboxKey := r.formSandboxProjectKey(sandboxID)
 	pipe.Set(ctx, sandboxKey, projectID.String(), projectSandboxTTL)
 
+	// Add to the set of all projects
+	allProjectsKey := r.formAllProjectsSetKey()
+	pipe.SAdd(ctx, allProjectsKey, projectID.String())
+	pipe.Expire(ctx, allProjectsKey, projectSandboxTTL)
+
+	// Publish an update notification
+	updateMsg := fmt.Sprintf("%s:update:%s", projectID.String(), sandboxID.String())
+	pipe.Publish(ctx, projectUpdateChannel, updateMsg)
+
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to set project-sandbox mapping: %w", err)
@@ -181,6 +198,14 @@ func (r *redisStore) RemoveSandboxMapping(ctx context.Context, sandboxID types.S
 	if projectID != "" {
 		projectSandboxKey := r.formProjectSandboxKey(projectID)
 		pipe.Del(ctx, projectSandboxKey)
+
+		// Remove from set of all projects
+		allProjectsKey := r.formAllProjectsSetKey()
+		pipe.SRem(ctx, allProjectsKey, projectID.String())
+
+		// Publish a removal notification
+		updateMsg := fmt.Sprintf("%s:remove:", projectID.String())
+		pipe.Publish(ctx, projectUpdateChannel, updateMsg)
 	}
 
 	releasedKey := r.formReleasedKey(sandboxID)
@@ -192,4 +217,108 @@ func (r *redisStore) RemoveSandboxMapping(ctx context.Context, sandboxID types.S
 	}
 
 	return nil
+}
+
+// SubscribeToProjectSandboxUpdates subscribes to project-sandbox mapping updates.
+// The callback will be called whenever a project-sandbox mapping is updated or removed.
+func (r *redisStore) SubscribeToProjectSandboxUpdates(ctx context.Context, callback func(projectID types.ProjectID, sandboxID types.SandboxID, isRemoval bool)) error {
+	pubsub := r.client.Subscribe(ctx, projectUpdateChannel)
+	defer pubsub.Close()
+
+	// Listen for messages in a goroutine
+	go func() {
+		for {
+			msg, err := pubsub.ReceiveMessage(ctx)
+			if err != nil {
+				return
+			}
+
+			// Parse the message
+			parts := strings.SplitN(msg.Payload, ":", 3)
+			if len(parts) != 3 {
+				continue
+			}
+
+			projectID, err := types.NewProjectID(parts[0])
+			if err != nil {
+				continue
+			}
+
+			isRemoval := parts[1] == "remove"
+
+			if isRemoval {
+				// For removals, call with empty sandboxID
+				callback(projectID, "", true)
+			} else {
+				// For updates, parse the sandboxID
+				sandboxID, err := types.NewSandboxID(parts[2])
+				if err != nil {
+					continue
+				}
+				callback(projectID, sandboxID, false)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// GetAllProjectSandboxMappings returns all project-sandbox mappings
+func (r *redisStore) GetAllProjectSandboxMappings(ctx context.Context) (map[types.ProjectID]types.SandboxID, error) {
+	// Get all project IDs from the set
+	allProjectsKey := r.formAllProjectsSetKey()
+	projectIDStrs, err := r.client.SMembers(ctx, allProjectsKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all project IDs: %w", err)
+	}
+
+	if len(projectIDStrs) == 0 {
+		return make(map[types.ProjectID]types.SandboxID), nil
+	}
+
+	// Create a pipeline to batch get all sandbox IDs
+	pipe := r.client.Pipeline()
+	cmds := make(map[string]*redis.StringCmd)
+
+	// Queue up all the GET commands
+	for _, projectIDStr := range projectIDStrs {
+		projectID, err := types.NewProjectID(projectIDStr)
+		if err != nil {
+			continue
+		}
+		key := r.formProjectSandboxKey(projectID)
+		cmds[projectIDStr] = pipe.Get(ctx, key)
+	}
+
+	// Execute the pipeline
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to get all project-sandbox mappings: %w", err)
+	}
+
+	// Process the results
+	result := make(map[types.ProjectID]types.SandboxID)
+	for projectIDStr, cmd := range cmds {
+		sandboxIDStr, err := cmd.Result()
+		if err != nil {
+			if err == redis.Nil {
+				continue // Skip if the mapping doesn't exist anymore
+			}
+			return nil, fmt.Errorf("failed to get sandbox for project %s: %w", projectIDStr, err)
+		}
+
+		projectID, err := types.NewProjectID(projectIDStr)
+		if err != nil {
+			continue
+		}
+
+		sandboxID, err := types.NewSandboxID(sandboxIDStr)
+		if err != nil {
+			continue
+		}
+
+		result[projectID] = sandboxID
+	}
+
+	return result, nil
 }

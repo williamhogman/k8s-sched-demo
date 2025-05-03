@@ -11,7 +11,8 @@ import (
 // Config holds all configuration for the scheduler service in a flat structure
 type Config struct {
 	// Server settings
-	Port int `envconfig:"PORT" default:"50051"`
+	Port    int `envconfig:"PORT" default:"50051"`
+	XDSPort int `envconfig:"XDS_PORT" default:"50052"` // Dedicated port for XDS server
 
 	// Kubernetes settings
 	MockMode     bool   `envconfig:"MOCK" default:"false"`

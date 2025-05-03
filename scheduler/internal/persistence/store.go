@@ -23,6 +23,12 @@ type Store interface {
 	// IsSandboxReleased checks if a sandbox was recently released
 	IsSandboxReleased(ctx context.Context, sandboxID types.SandboxID) (bool, error)
 
+	// SubscribeToProjectSandboxUpdates subscribes to project-sandbox mapping updates
+	SubscribeToProjectSandboxUpdates(ctx context.Context, callback func(projectID types.ProjectID, sandboxID types.SandboxID, isRemoval bool)) error
+
+	// GetAllProjectSandboxMappings returns all project-sandbox mappings
+	GetAllProjectSandboxMappings(ctx context.Context) (map[types.ProjectID]types.SandboxID, error)
+
 	// Close closes any connections
 	Close() error
 }

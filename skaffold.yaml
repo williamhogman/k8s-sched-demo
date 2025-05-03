@@ -29,15 +29,10 @@ build:
             - gen/**/*.go
 portForward:
 - resourceType: service
-  resourceName: activator
-  namespace: sandbox
-  port: 80
-  localPort: 8080
-- resourceType: service
   resourceName: envoy
   namespace: sandbox
   port: 80
-  localPort: 8081
+  localPort: 8080
 - resourceType: service
   resourceName: envoy
   namespace: sandbox
